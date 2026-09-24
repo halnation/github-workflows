@@ -46,9 +46,14 @@ jobs:
           # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
           # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
           # ignored -- they document an address, they don't use one on-chain.
-          book=$(find lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
+          # Upstream aave-proposals-v3 pins aave-address-book only as a nested
+          # submodule of aave-helpers (lib/aave-helpers/lib/aave-address-book) -- a
+          # second, independently-pinned top-level copy caused a real forge remapping
+          # clash against aave-helpers' own ProtocolV3TestBase in the trial build, so
+          # this replica follows upstream's single-copy layout.
+          book=$(find lib/aave-helpers/lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
           if [ -z "$book" ]; then
-            echo "lib/aave-address-book not found; is the submodule checked out?"; exit 1
+            echo "lib/aave-helpers/lib/aave-address-book not found; is the submodule checked out recursively?"; exit 1
           fi
           book_text=$(cat $book)
           fail=0

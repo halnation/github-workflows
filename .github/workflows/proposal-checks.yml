@@ -306,16 +306,6 @@ jobs:
         with:
           name: regenerated-diffs
           path: diffs/
-      - name: Build AI input
-        if: steps.folder.outputs.md != ''
-        run: |
-          {
-            echo "<forum>"; cat forum.txt; echo "</forum>"
-            echo "<proposal-md>"; cat "${{ steps.folder.outputs.md }}"; echo "</proposal-md>"
-            echo "<diff-report>"
-            [ -n "${{ steps.diff.outputs.report }}" ] && cat "${{ steps.diff.outputs.report }}"
-            echo "</diff-report>"
-          } > input.txt
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.folder.outputs.md != ''
         with:
@@ -327,6 +317,23 @@ jobs:
         if: steps.folder.outputs.md != ''
         with:
           python-version: "3.12"
+      - name: Trim forum text to its Specification/Motivation section(s)
+        if: steps.folder.outputs.md != ''
+        run: |
+          # Cuts token usage on long funding-update posts that cover many
+          # payloads; falls back to the full post if no matching heading.
+          python3 .gh-workflows-ai/forum_trim.py forum.txt > forum.trimmed.txt
+          mv forum.trimmed.txt forum.txt
+      - name: Build AI input
+        if: steps.folder.outputs.md != ''
+        run: |
+          {
+            echo "<forum>"; cat forum.txt; echo "</forum>"
+            echo "<proposal-md>"; cat "${{ steps.folder.outputs.md }}"; echo "</proposal-md>"
+            echo "<diff-report>"
+            [ -n "${{ steps.diff.outputs.report }}" ] && cat "${{ steps.diff.outputs.report }}"
+            echo "</diff-report>"
+          } > input.txt
       - name: Run spec-check AI call
         if: steps.folder.outputs.md != ''
         env:
@@ -335,7 +342,9 @@ jobs:
           AI_API_URL: https://openrouter.ai/api/v1/chat/completions
           AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          AI_MAX_TOKENS: "32000"
+          AI_MAX_TOKENS: "8000"
+          AI_REASONING_EFFORT: "low"
+          AI_RESPONSE_FORMAT: "json_object"
         run: |
           # This is an advisory-only step: an AI-side failure (truncation, API
           # error, timeout) must never turn the job red -- under a ruleset that

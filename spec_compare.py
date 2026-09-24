@@ -24,16 +24,23 @@ def _extract_address(text):
     return m.group(0).lower() if m else None
 
 
+_SCALE_SUFFIXES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
+
 def _leading_number(text):
     if not text:
         return None
-    m = re.search(r"[\d,]+(?:\.\d+)?", text)
-    if not m:
+    m = re.search(r"([\d,]+(?:\.\d+)?)\s*([kKmMbB])?(?![a-zA-Z])", text)
+    if not m or not m.group(1):
         return None
     try:
-        return float(m.group(0).replace(",", ""))
+        value = float(m.group(1).replace(",", ""))
     except ValueError:
         return None
+    suffix = (m.group(2) or "").lower()
+    if suffix in _SCALE_SUFFIXES:
+        value *= _SCALE_SUFFIXES[suffix]
+    return value
 
 
 def compare(forum_items, payload_items):

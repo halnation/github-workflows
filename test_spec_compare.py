@@ -6,6 +6,33 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spec_compare as sc
 
 
+class LeadingNumberScaleSuffixTests(unittest.TestCase):
+    def test_m_suffix_expands_to_millions(self):
+        self.assertEqual(sc._leading_number("0.5M"), 500_000.0)
+        self.assertEqual(sc._leading_number("8M"), 8_000_000.0)
+
+    def test_k_suffix_expands_to_thousands(self):
+        self.assertEqual(sc._leading_number("150K"), 150_000.0)
+
+    def test_no_suffix_is_unscaled(self):
+        self.assertEqual(sc._leading_number("50,000"), 50_000.0)
+        self.assertEqual(sc._leading_number("0.5"), 0.5)
+
+    def test_word_starting_with_suffix_letter_is_not_mistaken_for_a_scale(self):
+        # "150 Kraken" must not be read as 150 * 1000
+        self.assertEqual(sc._leading_number("150 Kraken tokens"), 150.0)
+
+    def test_scale_mismatch_flagged_as_a_warning(self):
+        # forum says 0.5M, payload (misapplied decimals) decodes to 0.5 -- a
+        # real 1,000,000x scale bug that a naive leading-digit compare misses.
+        forum = [{"action": "Approve", "asset": "aEthLidoGHO", "amount": "0.5M",
+                  "recipient": "ALC 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b", "network": "Ethereum"}]
+        payload = [{"amount": "0.5", "recipient": "0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b", "decimals": 6}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(len(out["warnings"]), 1)
+        self.assertIn("amount", out["warnings"][0]["detail"])
+
+
 class CompareTests(unittest.TestCase):
     def test_matching_amount_and_recipient_is_clean(self):
         forum = [{"action": "Reimburse", "asset": "aEthLidoGHO", "amount": "50,000",

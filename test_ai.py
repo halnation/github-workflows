@@ -269,6 +269,79 @@ class ErrorPathTests(unittest.TestCase):
         self.assertNotIn("OVERFLOW-MARKER-BEYOND-CAP", message)
 
 
+class BuildRequestBodyTests(unittest.TestCase):
+    def tearDown(self):
+        importlib.reload(ai)
+
+    def test_anthropic_style_has_no_openai_only_fields(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic"}, clear=False):
+            os.environ.pop("AI_REASONING_EFFORT", None)
+            os.environ.pop("AI_RESPONSE_FORMAT", None)
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertNotIn("reasoning", body)
+        self.assertNotIn("response_format", body)
+        self.assertNotIn("usage", body)
+
+    def test_openai_style_defaults_include_usage_only(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai"}, clear=False):
+            os.environ.pop("AI_REASONING_EFFORT", None)
+            os.environ.pop("AI_RESPONSE_FORMAT", None)
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["usage"], {"include": True})
+        self.assertNotIn("reasoning", body)
+        self.assertNotIn("response_format", body)
+
+    def test_reasoning_effort_low_sets_effort_object(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_REASONING_EFFORT": "low"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["reasoning"], {"effort": "low"})
+
+    def test_reasoning_effort_off_disables_reasoning(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_REASONING_EFFORT": "off"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["reasoning"], {"enabled": False})
+
+    def test_response_format_sets_type(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_RESPONSE_FORMAT": "json_object"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("hi")
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+
+    def test_model_and_max_tokens_and_prompt_always_present(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_MODEL": "z-ai/glm-5.3-flash", "AI_MAX_TOKENS": "999"}, clear=False):
+            importlib.reload(ai)
+            body = ai.build_request_body("the prompt")
+        self.assertEqual(body["model"], "z-ai/glm-5.3-flash")
+        self.assertEqual(body["max_tokens"], 999)
+        self.assertEqual(body["messages"], [{"role": "user", "content": "the prompt"}])
+
+
+class LogUsageTests(unittest.TestCase):
+    def test_prints_usage_and_cost_to_stderr(self):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "stderr", buf):
+            ai.log_usage({"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.0012}})
+        out = buf.getvalue()
+        self.assertIn("0.0012", out)
+        self.assertIn("15", out)
+
+    def test_never_prints_the_api_key(self):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "stderr", buf):
+            ai.log_usage({"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.0}})
+        self.assertNotIn("sk-", buf.getvalue())
+
+    def test_missing_usage_does_not_crash(self):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "stderr", buf):
+            ai.log_usage({})
+        self.assertEqual(buf.getvalue(), "")
+
+
 class ConfigTests(unittest.TestCase):
     def test_unknown_api_style_is_startup_fatal(self):
         with mock.patch.dict(os.environ, {"AI_API_STYLE": "groq"}, clear=False):

@@ -18,6 +18,8 @@ MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS") or "1500")
 OUTPUT_CAP = int(os.environ.get("AI_OUTPUT_CAP") or "20000")
 TIMEOUT = int(os.environ.get("AI_TIMEOUT") or "120")
 API_URL = os.environ.get("AI_API_URL") or (None if STYLE == "openai" else "https://api.anthropic.com/v1/messages")
+REASONING_EFFORT = os.environ.get("AI_REASONING_EFFORT") or ""
+RESPONSE_FORMAT = os.environ.get("AI_RESPONSE_FORMAT") or ""
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 UNCLOSED_THINK_RE = re.compile(r"<think>.*", re.DOTALL)
@@ -38,10 +40,46 @@ def strip_think(text):
     return UNCLOSED_THINK_RE.sub("", THINK_RE.sub("", text))
 
 
+def build_request_body(prompt):
+    """Pure function (no I/O) so the request shape is unit-testable."""
+    body = {"model": MODEL, "max_tokens": MAX_TOKENS, "messages": [{"role": "user", "content": prompt}]}
+    if STYLE == "openai":
+        if REASONING_EFFORT:
+            if REASONING_EFFORT == "off":
+                body["reasoning"] = {"enabled": False}
+            else:
+                body["reasoning"] = {"effort": REASONING_EFFORT}
+        if RESPONSE_FORMAT:
+            body["response_format"] = {"type": RESPONSE_FORMAT}
+        body["usage"] = {"include": True}
+    return body
+
+
+def log_usage(payload):
+    usage = payload.get("usage")
+    if not usage:
+        return
+    cost = usage.get("cost")
+    prompt_t = usage.get("prompt_tokens")
+    completion_t = usage.get("completion_tokens")
+    total_t = usage.get("total_tokens")
+    print(
+        json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": prompt_t,
+                    "completion_tokens": completion_t,
+                    "total_tokens": total_t,
+                    "cost": cost,
+                }
+            }
+        ),
+        file=sys.stderr,
+    )
+
+
 def call_api(prompt, api_key):
-    body = json.dumps(
-        {"model": MODEL, "max_tokens": MAX_TOKENS, "messages": [{"role": "user", "content": prompt}]}
-    ).encode("utf-8")
+    body = json.dumps(build_request_body(prompt)).encode("utf-8")
     if STYLE == "anthropic":
         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     else:
@@ -54,6 +92,7 @@ def call_api(prompt, api_key):
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         sys.exit(f"AI API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+    log_usage(payload)
     try:
         if STYLE == "anthropic":
             if payload.get("stop_reason") == "max_tokens":

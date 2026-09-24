@@ -1,0 +1,14 @@
+name: report
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+jobs:
+  comment:
+    permissions:
+      pull-requests: write
+      actions: read
+    uses: TokenLogic-com-au/github-workflows/.github/workflows/report-comment.yml@0000000000000000000000000000000000000000
+    with:
+      workflow-name: ci
+      dry_run: true

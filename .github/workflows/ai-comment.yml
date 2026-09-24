@@ -1,0 +1,157 @@
+name: ai-comment
+on:
+  workflow_call:
+    inputs:
+      kind:
+        required: true
+        type: string
+      backend:
+        type: string
+        default: anthropic
+      dry_run:
+        type: boolean
+        default: true
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      TS_OAUTH_CLIENT_ID:
+        required: false
+      TS_OAUTH_SECRET:
+        required: false
+      LOCAL_LLM_URL:
+        required: false
+permissions: {}
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: ai-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+env:
+  DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+  AI_OUTPUT_CAP: "20000"
+  MARKER: "<!-- github-workflows-ai -->"
+jobs:
+  collect:
+    if: >-
+      github.event.repository.private &&
+      (inputs.kind != 'review' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      number: ${{ steps.gate.outputs.number }}
+    steps:
+      - name: Resolve subject and recency gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          number="${PR_NUMBER:-$ISSUE_NUMBER}"
+          cutoff=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ)
+          last=$(gh api --paginate "repos/$REPO/issues/$number/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.updated_at]|max // empty')
+          if [ -z "$last" ] || [[ "$last" < "$cutoff" ]]; then
+            echo "number=$number" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Collect the subject
+        if: steps.gate.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.gate.outputs.number }}
+          KIND: ${{ inputs.kind }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          if [ "$KIND" = "review" ]; then
+            gh api "repos/$REPO/pulls/$NUMBER" -H "Accept: application/vnd.github.v3.diff" > input.txt
+          else
+            printf '%s' "$BODY" > input.txt
+          fi
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: steps.gate.outputs.number != ''
+        with:
+          name: ai-input
+          path: input.txt
+  generate:
+    needs: collect
+    if: needs.collect.outputs.number != ''
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          ref: 0000000000000000000000000000000000000000 # pin to the reviewed github-workflows commit before install
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ai-input
+      - name: Join tailnet
+        if: inputs.backend == 'local' && inputs.dry_run == false
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+      - name: Run ai.py
+        env:
+          ANTHROPIC_API_KEY: ${{ inputs.backend == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          AI_API_STYLE: ${{ inputs.backend == 'local' && 'openai' || 'anthropic' }}
+          AI_API_URL: ${{ inputs.backend == 'local' && secrets.LOCAL_LLM_URL || '' }}
+          AI_MODEL: ${{ inputs.backend == 'local' && vars.LOCAL_LLM_MODEL || '' }}
+          AI_MAX_TOKENS: ${{ inputs.backend == 'local' && '4096' || '' }}
+          AI_TIMEOUT: ${{ inputs.backend == 'local' && '600' || '' }}
+          KIND: ${{ inputs.kind }}
+          BACKEND: ${{ inputs.backend }}
+        run: |
+          case "$KIND" in review|scope) ;; *) echo "bad kind: $KIND"; exit 1;; esac
+          case "$BACKEND" in anthropic|local) ;; *) echo "bad backend: $BACKEND"; exit 1;; esac
+          python3 ai.py "$KIND" input.txt out.md
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: ai-output
+          path: out.md
+  post:
+    needs: [collect, generate]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ai-output
+      - name: Cap and post comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.collect.outputs.number }}
+        run: |
+          if [ "${DRY_RUN:-1}" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"ai-comment",number:$n}' >&2
+            exit 0
+          fi
+          {
+            printf '%s\n' "$MARKER"
+            echo "**AI note (advisory, not a review)**"
+            echo '```text'
+            sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' -e "s/\`/'/g" out.md \
+              | head -c "$AI_OUTPUT_CAP"
+            echo '```'
+          } > comment.md
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
+          if [ -n "$existing" ]; then
+            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@comment.md
+          else
+            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md
+          fi

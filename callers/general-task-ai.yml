@@ -1,0 +1,16 @@
+name: ai-scope
+on:
+  issues:
+    types: [opened]
+jobs:
+  scope:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@0000000000000000000000000000000000000000
+    with:
+      kind: scope
+      dry_run: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

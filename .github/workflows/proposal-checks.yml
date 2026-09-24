@@ -335,7 +335,7 @@ jobs:
           AI_API_URL: https://openrouter.ai/api/v1/chat/completions
           AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          AI_MAX_TOKENS: "16000"
+          AI_MAX_TOKENS: "32000"
         run: |
           # This is an advisory-only step: an AI-side failure (truncation, API
           # error, timeout) must never turn the job red -- under a ruleset that

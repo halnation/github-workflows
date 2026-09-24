@@ -58,7 +58,7 @@ runs:
         if [ "$MIN_COVERAGE" -eq 0 ]; then
           echo "min_coverage not set; skipping coverage gate"
           echo "pct=" >> "$GITHUB_OUTPUT"
-          { echo "uncovered_sample<<COVERAGE_EOF"; echo "COVERAGE_EOF"; } >> "$GITHUB_OUTPUT"
+          echo "uncovered_sample=" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [ -n "$NO_MATCH_TEST" ]; then
@@ -104,11 +104,12 @@ runs:
               ;;
           esac
         done < lcov.info
-        {
-          echo "uncovered_sample<<COVERAGE_EOF"
-          printf '%s' "$uncovered_sample"
-          echo "COVERAGE_EOF"
-        } >> "$GITHUB_OUTPUT"
+        # base64-encoded single-line output: the multi-line `name<<EOF ... EOF`
+        # form was observed to fail delimiter matching on this runner
+        # ("Invalid value. Matching delimiter not found") for non-trivial
+        # content, silently dropping the output. base64 sidesteps that
+        # entirely; the summary job decodes it back.
+        echo "uncovered_sample=$(printf '%s' "$uncovered_sample" | base64 -w0)" >> "$GITHUB_OUTPUT"
         if [ "$total" -eq 0 ]; then
           echo "pct=" >> "$GITHUB_OUTPUT"
           echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"

@@ -34,14 +34,14 @@ jobs:
     permissions:
       contents: read
     outputs:
-      details: ${{ steps.check.outputs.details }}
+      details: ${{ steps.measure.outputs.details }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
-      - name: New raw addresses must exist in the address book
-        id: check
+      - name: Find unrecognized raw addresses
+        id: measure
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -54,11 +54,22 @@ jobs:
           # second, independently-pinned top-level copy caused a real forge remapping
           # clash against aave-helpers' own ProtocolV3TestBase in the trial build, so
           # this replica follows upstream's single-copy layout.
+          #
+          # This step always exits 0 (see "enforce" below): a step that exits
+          # non-zero here was observed to lose its GITHUB_OUTPUT writes on this
+          # runner (a `grep -q`-closed-early pipe threw a broken-pipe SIGPIPE
+          # under `set -o pipefail`, and the resulting non-zero exit corrupted
+          # the multi-line output write) -- splitting measurement (always
+          # succeeds) from enforcement (fails the job) avoids that class of bug
+          # entirely, same fix as coverage-gate's measure/enforce split.
           book=$(find lib/aave-helpers/lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
           if [ -z "$book" ]; then
-            echo "lib/aave-helpers/lib/aave-address-book not found; is the submodule checked out recursively?"; exit 1
+            echo "lib/aave-helpers/lib/aave-address-book not found; is the submodule checked out recursively?"
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            echo "details=$(printf '%s' 'address book not found' | base64 -w0)" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          book_text=$(cat $book)
+          book_text_lc=$(cat $book | tr 'A-F' 'a-f')
           fail=0
           details=""
           while IFS= read -r hit; do
@@ -67,12 +78,15 @@ jobs:
             rest="${hit#*:}"
             lineno="${rest%%:*}"
             addr="${rest#*:}"
-            addr_lc=$(echo "$addr" | tr 'A-F' 'a-f')
-            if ! echo "$book_text" | tr 'A-F' 'a-f' | grep -qF "$addr_lc"; then
-              echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
-              details="${details}${file}:${lineno}: raw address ${addr} not in the address book$(printf '\n')"
-              fail=1
-            fi
+            addr_lc=$(printf '%s' "$addr" | tr 'A-F' 'a-f')
+            case "$book_text_lc" in
+              *"$addr_lc"*) ;;
+              *)
+                echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+                details="${details}${file}:${lineno}: raw address ${addr} not in the address book$(printf '\n')"
+                fail=1
+                ;;
+            esac
           done < <(
             git diff -U0 "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.sol' ':!src/**/*.t.sol' \
               | awk '
@@ -89,13 +103,22 @@ jobs:
                   }
                 '
           )
-          {
-            echo "details<<ADDRESSBOOK_EOF"
-            printf '%s' "$details"
-            echo "ADDRESSBOOK_EOF"
-          } >> "$GITHUB_OUTPUT"
-          [ "$fail" -eq 0 ] && echo "no new unrecognized addresses"
-          exit $fail
+          echo "details=$(printf '%s' "$details" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          if [ "$fail" -eq 0 ]; then
+            echo "no new unrecognized addresses"
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=found" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Enforce
+        env:
+          STATUS: ${{ steps.measure.outputs.status }}
+        run: |
+          case "$STATUS" in
+            ok) exit 0 ;;
+            found) echo "unrecognized raw addresses found"; exit 1 ;;
+            *) echo "address-book check errored: $STATUS"; exit 1 ;;
+          esac
 
   spelling:
     runs-on: ubuntu-latest
@@ -137,11 +160,12 @@ jobs:
           status=$?
           set -e
           cat cspell-out.txt
-          {
-            echo "details<<CSPELL_EOF"
-            [ "$status" -ne 0 ] && grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15
-            echo "CSPELL_EOF"
-          } >> "$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ]; then
+            detail=$(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
+          else
+            detail=""
+          fi
+          echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
           exit $status
 
   coverage:
@@ -387,10 +411,16 @@ jobs:
           COVERAGE_MIN: ${{ needs.coverage.outputs.min_coverage }}
           ADVISORY_URL: ${{ needs.advisory.outputs.comment_url }}
         run: |
+          # details/uncovered_sample are base64 on the wire (see the
+          # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
+          # writes were observed to fail delimiter matching on this runner.
+          ab_d_plain=$(printf '%s' "$DETAILS_ADDRESS_BOOK" | base64 -d 2>/dev/null || true)
+          sp_d_plain=$(printf '%s' "$DETAILS_SPELLING" | base64 -d 2>/dev/null || true)
+          cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
           jq -n \
             --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
             --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" \
-            --arg ab_d "$DETAILS_ADDRESS_BOOK" --arg sp_d "$DETAILS_SPELLING" --arg cov_d "$DETAILS_COVERAGE" \
+            --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
             --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
             '{
               results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},

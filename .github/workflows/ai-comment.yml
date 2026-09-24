@@ -5,9 +5,6 @@ on:
       kind:
         required: true
         type: string
-      workflows_ref:
-        required: true
-        type: string
       backend:
         type: string
         default: anthropic
@@ -141,11 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/github-workflows
-          ref: ${{ inputs.workflows_ref }}
-          persist-credentials: false
+      - uses: halnation/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -164,7 +157,7 @@ jobs:
         run: |
           case "$KIND" in review|scope) ;; *) echo "bad kind: $KIND"; exit 1;; esac
           case "$BACKEND" in anthropic|openrouter) ;; *) echo "bad backend: $BACKEND"; exit 1;; esac
-          python3 ai.py "$KIND" input.txt out.md
+          python3 "$GW/ai.py" "$KIND" input.txt out.md
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
         with:
           name: ai-output
@@ -180,12 +173,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ai-output
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/github-workflows
-          ref: ${{ inputs.workflows_ref }}
-          path: .gh-workflows-sanitize
-          persist-credentials: false
+      - uses: halnation/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -201,7 +189,7 @@ jobs:
           fi
           # Rendered markdown, not a ```text fence -- sanitize.py (shared with
           # proposal-checks' advisory comment) is what makes that safe.
-          body=$(python3 .gh-workflows-sanitize/sanitize.py out.md "$AI_OUTPUT_CAP")
+          body=$(python3 "$GW/sanitize.py" out.md "$AI_OUTPUT_CAP")
           {
             printf '%s\n' "$MARKER"
             echo "**AI note (advisory, not a review)**"

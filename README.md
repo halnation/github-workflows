@@ -62,13 +62,11 @@ checks it out, and `create-github-app-token` fails outright if the App is not
 installed on every repository named in `repositories:`, so listing a repo the
 token never uses is a pure liability, not a safety margin.
 
-`github-workflows` itself must still be a **public** repository: `ai-comment.yml`'s
-`generate` job checks it out with the default job token (`permissions: {}`,
-no App token -- kept isolated from the Anthropic secret on purpose) to fetch
-`ai.py` at a pinned commit. That checkout only works on a public repo; a
-private `github-workflows` would need a separate App-token-based checkout
-path here, which this round does not add (it holds no secrets, only pinned
-commit references, so public is the correct shape regardless).
+`ai-comment.yml` and `proposal-checks.yml` fetch their scripts through
+`.github/actions/scripts@main`, so they always follow `main`. GitHub fetches
+that composite action itself (the same mechanism `coverage-gate` uses), so no
+checkout step or token is needed even though `github-workflows` is private --
+the org's Actions access setting on this repo must allow org repositories.
 
 ## Secrets and variables the callers need
 

@@ -8,9 +8,6 @@ on:
       min_coverage:
         type: number
         default: 100
-      workflows_ref:
-        required: true
-        type: string
       backend:
         type: string
         default: openrouter
@@ -130,12 +127,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/github-workflows
-          ref: ${{ inputs.workflows_ref }}
-          path: .gh-workflows-config
-          persist-credentials: false
+      - uses: halnation/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "22"
@@ -156,7 +148,7 @@ jobs:
             echo "no changed proposal .md files"; exit 0
           fi
           set +e
-          npx -y cspell@9.2.1 --no-progress -c .gh-workflows-config/cspell.json $files > cspell-out.txt 2>&1
+          npx -y cspell@9.2.1 --no-progress -c "$GW/cspell.json" $files > cspell-out.txt 2>&1
           status=$?
           set -e
           cat cspell-out.txt
@@ -332,13 +324,8 @@ jobs:
         with:
           name: regenerated-diffs
           path: diffs/
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: halnation/github-workflows/.github/actions/scripts@main
         if: steps.folder.outputs.md != ''
-        with:
-          repository: ${{ github.repository_owner }}/github-workflows
-          ref: ${{ inputs.workflows_ref }}
-          path: .gh-workflows-ai
-          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: steps.folder.outputs.md != ''
         with:
@@ -348,7 +335,7 @@ jobs:
         run: |
           # Cuts token usage on long funding-update posts that cover many
           # payloads; falls back to the full post if no matching heading.
-          python3 .gh-workflows-ai/forum_trim.py forum.txt > forum.trimmed.txt
+          python3 "$GW/forum_trim.py" forum.txt > forum.trimmed.txt
           mv forum.trimmed.txt forum.txt
       - name: Build AI input
         if: steps.folder.outputs.md != ''
@@ -376,15 +363,14 @@ jobs:
           # error, timeout) must never turn the job red -- under a ruleset that
           # would block a merge on the AI provider's flakiness, not on anything
           # about the proposal. Log the failure into the comment instead.
-          cd .gh-workflows-ai
-          if ! python3 ai.py spec-check ../input.txt ../ai-out.md; then
+          if ! python3 "$GW/ai.py" spec-check input.txt ai-out.md; then
             echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ../ai-out.md
           fi
       - name: Deterministic decimals-scale check
         if: steps.folder.outputs.md != ''
         run: |
           if [ -n "${{ steps.diff.outputs.report }}" ]; then
-            python3 .gh-workflows-ai/scale_check.py "${{ steps.diff.outputs.report }}" > scale-out.txt || true
+            python3 "$GW/scale_check.py" "${{ steps.diff.outputs.report }}" > scale-out.txt || true
           else
             echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
           fi
@@ -406,7 +392,7 @@ jobs:
           fi
           diff_report_path="${{ steps.diff.outputs.report }}"
           printf '%s' "$FORK_TEST_STATUS" > fork-status.txt
-          python3 .gh-workflows-ai/render_advisory_comment.py ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt
+          python3 "$GW/render_advisory_comment.py" ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md fork-status.txt
           if [ "$DIFF_SOURCE" = "committed" ]; then
             diff_note="_Diff report: committed by the author._"
           else
@@ -438,12 +424,7 @@ jobs:
     env:
       SUMMARY_MARKER: "<!-- github-workflows-proposal-summary -->"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository_owner }}/github-workflows
-          ref: ${{ inputs.workflows_ref }}
-          path: .gh-workflows-summary
-          persist-credentials: false
+      - uses: halnation/github-workflows/.github/actions/scripts@main
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -487,7 +468,7 @@ jobs:
               details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
               coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
             }' > summary_payload.json
-          python3 .gh-workflows-summary/render_summary_comment.py < summary_payload.json > summary_body.md || \
+          python3 "$GW/render_summary_comment.py" < summary_payload.json > summary_body.md || \
             echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
           if [ "$DRY_RUN" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"proposal-summary-comment",number:$n}' >&2

@@ -11,7 +11,6 @@ jobs:
     uses: "TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     with:
       kind: scope
-      workflows_ref: "<github-workflows commit SHA>" # REQUIRED: same commit as the pin above
       dry_run: true
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

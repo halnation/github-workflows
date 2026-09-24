@@ -33,6 +33,38 @@ class ParsePayloadActionsTests(unittest.TestCase):
         self.assertEqual(out[1]["amount"], "72")
         self.assertEqual(out[1]["decimals"], 8)
 
+    def test_from_to_shaped_line_extracts_the_to_address_not_the_from_address(self):
+        # ProtocolV3TestBase event-log lines put the sender's address first:
+        # Transfer(from: <sender>, to: <recipient>, value: ...). The FIRST
+        # 0x-address in the line is the sender, not the recipient -- a naive
+        # "grab the first address" extraction picks the wrong one, which then
+        # never matches the forum's real recipient address downstream.
+        line = (
+            "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 0.0000 [500000000000, 18 decimals])"
+        )
+        out = dp.parse_payload_actions(line)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["recipient"], "0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b")
+
+    def test_duplicate_transfer_and_balance_transfer_lines_for_the_same_move_collapse_to_one(self):
+        # An aToken transfer emits both a standard Transfer event and Aave's
+        # own BalanceTransfer event for the SAME underlying move -- both
+        # decode to identical amount/decimals/recipient. Without dedup this
+        # becomes two duplicate findings for one real action.
+        text = (
+            "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 0.0000 [500000000000, 18 decimals])\n"
+            "BalanceTransfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 0.0000 [500000000000, 18 decimals], index: 1000000000000000000000000000)\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["recipient"], "0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b")
+
 
 if __name__ == "__main__":
     unittest.main()

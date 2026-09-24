@@ -16,26 +16,51 @@ DECODED_VALUE_RE = re.compile(
     r"(?P<human>[\d,]+(?:\.\d+)?)\s*\[\s*(?P<raw>\d+)\s*,\s*(?P<decimals>\d+)\s*decimals\s*\]"
 )
 ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+# ProtocolV3TestBase event-log lines are shaped "from: <sender>, to:
+# <recipient>" -- the sender's address comes first on the line, so a plain
+# "first address in the line" search picks the wrong one. Prefer the address
+# that explicitly follows a "to" label; fall back to the first address in
+# the line for shapes that have no "from"/"to" labels at all.
+TO_ADDRESS_RE = re.compile(r"\bto:?\s+(0x[0-9a-fA-F]{40})", re.IGNORECASE)
+
+
+def _extract_recipient(line: str):
+    m = TO_ADDRESS_RE.search(line)
+    if m:
+        return m.group(1)
+    m = ADDRESS_RE.search(line)
+    return m.group(0) if m else None
 
 
 def parse_payload_actions(diff_report_text: str):
     """Returns a list of {"action", "asset", "amount", "decimals",
-    "recipient", "network", "raw_line"} extracted from decoded value lines."""
+    "recipient", "network", "raw_line"} extracted from decoded value lines.
+
+    Deduped on (amount, decimals, recipient): an aToken transfer emits both
+    a standard Transfer event and Aave's own BalanceTransfer event for the
+    same underlying move, and both decode to an identical entry here -- one
+    real action must not become two duplicate findings downstream.
+    """
     if not diff_report_text or not diff_report_text.strip():
         return []
     actions = []
+    seen = set()
     for line in diff_report_text.splitlines():
         m = DECODED_VALUE_RE.search(line)
         if not m:
             continue
-        addr_m = ADDRESS_RE.search(line)
+        recipient = _extract_recipient(line)
+        key = (m.group("human"), m.group("decimals"), recipient)
+        if key in seen:
+            continue
+        seen.add(key)
         actions.append(
             {
                 "action": "Transfer",
                 "asset": None,
                 "amount": m.group("human"),
                 "decimals": int(m.group("decimals")),
-                "recipient": addr_m.group(0) if addr_m else None,
+                "recipient": recipient,
                 "network": None,
                 "raw_line": line.strip(),
             }

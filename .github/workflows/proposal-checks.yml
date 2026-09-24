@@ -139,6 +139,7 @@ jobs:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"
           exclude_suffixes: ".t.sol scripts/"
+          no_match_test: "test_defaultProposalExecution"
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
 

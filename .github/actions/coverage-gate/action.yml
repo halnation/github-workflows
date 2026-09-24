@@ -16,6 +16,15 @@ inputs:
     description: "Space-separated SF: path suffixes to exclude even inside path_prefix (e.g. .t.sol scripts/)."
     required: false
     default: ".t.sol"
+  no_match_test:
+    description: >-
+      Optional forge --no-match-test regex, forwarded as-is. `forge coverage`
+      cannot run in --isolate mode, so any test relying on isolate-mode gas
+      metering (e.g. ProtocolV3TestBase.defaultTest's payload gas-limit check)
+      needs excluding here -- it is exercised by the plain `forge test` step
+      instead, where isolate is available.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -24,6 +33,7 @@ runs:
         MIN_COVERAGE: ${{ inputs.min_coverage }}
         PATH_PREFIX: ${{ inputs.path_prefix }}
         EXCLUDE_SUFFIXES: ${{ inputs.exclude_suffixes }}
+        NO_MATCH_TEST: ${{ inputs.no_match_test }}
       run: |
         case "$MIN_COVERAGE" in
           ''|*[!0-9]*) echo "min_coverage must be an integer 0-100, got: $MIN_COVERAGE"; exit 1 ;;
@@ -35,7 +45,11 @@ runs:
           echo "min_coverage not set; skipping coverage gate"
           exit 0
         fi
-        forge coverage --report lcov --report-file lcov.info
+        if [ -n "$NO_MATCH_TEST" ]; then
+          forge coverage --report lcov --report-file lcov.info --no-match-test "$NO_MATCH_TEST"
+        else
+          forge coverage --report lcov --report-file lcov.info
+        fi
         covered=0
         total=0
         in_scope=0

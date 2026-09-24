@@ -33,12 +33,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      details: ${{ steps.check.outputs.details }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           fetch-depth: 0
       - name: New raw addresses must exist in the address book
+        id: check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -57,6 +60,7 @@ jobs:
           fi
           book_text=$(cat $book)
           fail=0
+          details=""
           while IFS= read -r hit; do
             [ -z "$hit" ] && continue
             file="${hit%%:*}"
@@ -66,6 +70,7 @@ jobs:
             addr_lc=$(echo "$addr" | tr 'A-F' 'a-f')
             if ! echo "$book_text" | tr 'A-F' 'a-f' | grep -qF "$addr_lc"; then
               echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+              details="${details}${file}:${lineno}: raw address ${addr} not in the address book$(printf '\n')"
               fail=1
             fi
           done < <(
@@ -84,6 +89,11 @@ jobs:
                   }
                 '
           )
+          {
+            echo "details<<ADDRESSBOOK_EOF"
+            printf '%s' "$details"
+            echo "ADDRESSBOOK_EOF"
+          } >> "$GITHUB_OUTPUT"
           [ "$fail" -eq 0 ] && echo "no new unrecognized addresses"
           exit $fail
 
@@ -91,6 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      details: ${{ steps.check.outputs.details }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +117,7 @@ jobs:
         with:
           node-version: "22"
       - name: cspell on changed proposal .md files
+        id: check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -119,12 +132,26 @@ jobs:
           if [ -z "$files" ]; then
             echo "no changed proposal .md files"; exit 0
           fi
-          npx -y cspell@9.2.1 --no-progress -c .gh-workflows-config/cspell.json $files
+          set +e
+          npx -y cspell@9.2.1 --no-progress -c .gh-workflows-config/cspell.json $files > cspell-out.txt 2>&1
+          status=$?
+          set -e
+          cat cspell-out.txt
+          {
+            echo "details<<CSPELL_EOF"
+            [ "$status" -ne 0 ] && grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15
+            echo "CSPELL_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
 
   coverage:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      pct: ${{ steps.gate.outputs.pct }}
+      uncovered_sample: ${{ steps.gate.outputs.uncovered_sample }}
+      min_coverage: ${{ inputs.min_coverage }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,7 +161,8 @@ jobs:
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
       - name: Coverage threshold (payload contracts only)
-        uses: halnation/github-workflows/.github/actions/coverage-gate@883e23039a1398518551aebfa6142a144585f244
+        id: gate
+        uses: halnation/github-workflows/.github/actions/coverage-gate@<github-workflows commit SHA> # REQUIRED: pin to the reviewed github-workflows commit
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"
@@ -150,6 +178,8 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+    outputs:
+      comment_url: ${{ steps.post.outputs.comment_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -289,6 +319,7 @@ jobs:
             echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
           fi
       - name: Post one advisory comment
+        id: post
         if: steps.folder.outputs.md != ''
         continue-on-error: true
         env:
@@ -312,7 +343,71 @@ jobs:
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
             '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
           if [ -n "$existing" ]; then
-            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@comment.md
+            comment_id=$(gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@comment.md --jq .id)
           else
-            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md
+            comment_id=$(gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md --jq .id)
+          fi
+          echo "comment_url=${{ github.event.pull_request.html_url }}#issuecomment-$comment_id" >> "$GITHUB_OUTPUT"
+
+  summary:
+    needs: [address-book, spelling, coverage, advisory]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      SUMMARY_MARKER: "<!-- github-workflows-proposal-summary -->"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          ref: ${{ inputs.workflows_ref }}
+          path: .gh-workflows-summary
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Post the check summary comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          RESULT_ADDRESS_BOOK: ${{ needs.address-book.result }}
+          RESULT_SPELLING: ${{ needs.spelling.result }}
+          RESULT_COVERAGE: ${{ needs.coverage.result }}
+          RESULT_ADVISORY: ${{ needs.advisory.result }}
+          DETAILS_ADDRESS_BOOK: ${{ needs.address-book.outputs.details }}
+          DETAILS_SPELLING: ${{ needs.spelling.outputs.details }}
+          DETAILS_COVERAGE: ${{ needs.coverage.outputs.uncovered_sample }}
+          COVERAGE_PCT: ${{ needs.coverage.outputs.pct }}
+          COVERAGE_MIN: ${{ needs.coverage.outputs.min_coverage }}
+          ADVISORY_URL: ${{ needs.advisory.outputs.comment_url }}
+        run: |
+          jq -n \
+            --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
+            --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" \
+            --arg ab_d "$DETAILS_ADDRESS_BOOK" --arg sp_d "$DETAILS_SPELLING" --arg cov_d "$DETAILS_COVERAGE" \
+            --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
+            '{
+              results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
+              details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
+              coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
+            }' > summary_payload.json
+          python3 .gh-workflows-summary/render_summary_comment.py < summary_payload.json > summary_body.md || \
+            echo "_summary rendering failed; see the job log for individual check results._" > summary_body.md
+          if [ "$DRY_RUN" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"proposal-summary-comment",number:$n}' >&2
+            exit 0
+          fi
+          { printf '%s\n' "$SUMMARY_MARKER"; cat summary_body.md; } > summary_comment.md
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$SUMMARY_MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty') || true
+          if [ -n "$existing" ]; then
+            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@summary_comment.md || true
+          else
+            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@summary_comment.md || true
           fi

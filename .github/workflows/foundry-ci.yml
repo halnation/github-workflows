@@ -45,7 +45,7 @@ jobs:
       - uses: aave-dao/github-workflows/.github/actions/foundry-lcov-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
         continue-on-error: true
       - name: Coverage threshold (src/ only)
-        uses: halnation/github-workflows/.github/actions/coverage-gate@219b76445e3ce3ac021d2e9d1f4b854d2c1970aa
+        uses: halnation/github-workflows/.github/actions/coverage-gate@883e23039a1398518551aebfa6142a144585f244
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"

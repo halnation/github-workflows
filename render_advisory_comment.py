@@ -73,7 +73,7 @@ def render_comparison_alerts(comparison: dict) -> str:
     return "\n\n".join(blocks)
 
 
-def build(ai_out_text: str, diff_report_text: str, scale_out_text: str) -> str:
+def build(ai_out_text: str, diff_report_text: str, scale_out_text: str, fork_test_status: str = "") -> str:
     forum_items, error = _parse_forum_json(ai_out_text)
     parts = ["**Forum-vs-payload spec check (advisory, not a review or approval)**", ""]
 
@@ -85,10 +85,17 @@ def build(ai_out_text: str, diff_report_text: str, scale_out_text: str) -> str:
 
     payload_items = diff_parser.parse_payload_actions(diff_report_text)
     if not payload_items:
-        parts.append(
-            "> [!NOTE]\n> The diff report has no parseable state-change entries for this run "
-            "(the fork test may not have completed) -- comparison against the forum post was skipped."
-        )
+        fork_test_status = fork_test_status.strip()
+        if fork_test_status:
+            parts.append(
+                f"> [!WARNING]\n> the fork test failed, so the diff report could not be generated: "
+                f"{sanitize_markdown(fork_test_status, 300)}"
+            )
+        else:
+            parts.append(
+                "> [!NOTE]\n> The diff report has no parseable state-change entries for this run "
+                "(the fork test may not have completed) -- comparison against the forum post was skipped."
+            )
         parts.append("")
         parts.append(render_scale_alert(scale_out_text))
         return "\n".join(parts)
@@ -104,6 +111,7 @@ def main():
     ai_out_path, diff_report_path, scale_out_path, out_path = (
         sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     )
+    fork_status_path = sys.argv[5] if len(sys.argv) > 5 else None
     with open(ai_out_path, encoding="utf-8") as f:
         ai_out_text = f.read()
     try:
@@ -116,8 +124,15 @@ def main():
             scale_out_text = f.read()[:SCALE_OUTPUT_CAP]
     except FileNotFoundError:
         scale_out_text = ""
+    fork_test_status = ""
+    if fork_status_path:
+        try:
+            with open(fork_status_path, encoding="utf-8") as f:
+                fork_test_status = f.read()
+        except FileNotFoundError:
+            fork_test_status = ""
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(build(ai_out_text, diff_report_text, scale_out_text))
+        f.write(build(ai_out_text, diff_report_text, scale_out_text, fork_test_status))
 
 
 if __name__ == "__main__":

@@ -22,6 +22,13 @@ class BuildTests(unittest.TestCase):
         out = rac.build(CLEAN_FORUM, "", "no scale-bound flags")
         self.assertIn("no parseable state-change entries", out)
 
+    def test_fork_test_failure_reports_plainly_not_may_not_have_completed(self):
+        out = rac.build(CLEAN_FORUM, "", "no scale-bound flags", "test_defaultProposalExecution")
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("the fork test failed", out)
+        self.assertIn("test_defaultProposalExecution", out)
+        self.assertNotIn("may not have completed", out)
+
     def test_clean_match_shows_note_no_mismatches(self):
         out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags")
         self.assertIn("[!NOTE]", out)

@@ -1,0 +1,274 @@
+name: proposal-checks
+# Blocking: address-book (#5), spelling (#2), coverage (#4).
+# Advisory (never blocks): forum-vs-diff spec check (#3) + decimals sanity (#1),
+# posted as one PR comment, AI output never treated as approval.
+on:
+  workflow_call:
+    inputs:
+      min_coverage:
+        type: number
+        default: 100
+      workflows_ref:
+        required: true
+        type: string
+      backend:
+        type: string
+        default: openrouter
+      dry_run:
+        type: boolean
+        default: true
+    secrets:
+      RPC_MAINNET:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+permissions: {}
+defaults:
+  run:
+    shell: bash
+env:
+  MARKER: "<!-- github-workflows-proposal-spec -->"
+jobs:
+  address-book:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: New raw addresses must exist in the address book
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Scope: src/**/*.sol, excluding *.t.sol (test whale/claimer addresses are noise).
+          # Addresses that appear only on a `//` comment line (e.g. an explorer link) are
+          # ignored -- they document an address, they don't use one on-chain.
+          book=$(find lib/aave-address-book -name '*.sol' -o -name '*.ts' 2>/dev/null)
+          if [ -z "$book" ]; then
+            echo "lib/aave-address-book not found; is the submodule checked out?"; exit 1
+          fi
+          book_text=$(cat $book)
+          fail=0
+          while IFS= read -r hit; do
+            [ -z "$hit" ] && continue
+            file="${hit%%:*}"
+            rest="${hit#*:}"
+            lineno="${rest%%:*}"
+            addr="${rest#*:}"
+            addr_lc=$(echo "$addr" | tr 'A-F' 'a-f')
+            if ! echo "$book_text" | tr 'A-F' 'a-f' | grep -qF "$addr_lc"; then
+              echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
+              fail=1
+            fi
+          done < <(
+            git diff -U0 "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.sol' ':!src/**/*.t.sol' \
+              | awk '
+                  /^\+\+\+ b\// { file=substr($0,7); next }
+                  /^@@/ { split($0,a,"+"); split(a[2],b,","); line=b[1]+0; next }
+                  /^\+/ {
+                    content = substr($0,2)
+                    sub(/\/\/.*/, "", content)
+                    if (match(content, /0x[0-9a-fA-F]{40}/)) {
+                      print file ":" line ":" substr(content, RSTART, RLENGTH)
+                    }
+                    line++
+                    next
+                  }
+                '
+          )
+          [ "$fail" -eq 0 ] && echo "no new unrecognized addresses"
+          exit $fail
+
+  spelling:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          ref: ${{ inputs.workflows_ref }}
+          path: .gh-workflows-config
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: cspell on changed proposal .md files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Picked cspell over rojopolis/spellcheck-github-actions: rojopolis'
+          # pyspelling config takes static source globs, so limiting it to only
+          # this PR's changed files means rewriting its config every run.
+          # cspell takes a file list straight from argv, so `git diff
+          # --name-only` feeds it directly, and -c points at config that lives
+          # in github-workflows (checked out above), not duplicated per repo.
+          files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.md')
+          if [ -z "$files" ]; then
+            echo "no changed proposal .md files"; exit 0
+          fi
+          npx -y cspell@9.2.1 --no-progress -c .gh-workflows-config/cspell.json $files
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - run: forge build --deny notes
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+      - name: Coverage threshold (payload contracts only)
+        uses: halnation/github-workflows/.github/actions/coverage-gate@<github-workflows commit SHA> # REQUIRED: pin to the reviewed github-workflows commit
+        with:
+          min_coverage: ${{ inputs.min_coverage }}
+          path_prefix: "src/"
+          exclude_suffixes: ".t.sol scripts/"
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+
+  advisory:
+    runs-on: ubuntu-latest
+    if: github.event.repository.private
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
+      - name: Recency gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cutoff=$(date -u -d '-24 hours' +%Y-%m-%dT%H:%M:%SZ)
+          last=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.updated_at]|max // empty')
+          if [ -z "$last" ] || [[ "$last" < "$cutoff" ]]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Find the changed proposal folder
+        id: folder
+        if: steps.gate.outputs.run == '1'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          md=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.md' | head -1)
+          if [ -z "$md" ]; then
+            echo "no changed proposal .md in this PR; skipping advisory step"
+            echo "md=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "md=$md" >> "$GITHUB_OUTPUT"
+          echo "dir=$(dirname "$md")" >> "$GITHUB_OUTPUT"
+      - name: Fetch forum raw text
+        id: forum
+        if: steps.folder.outputs.md != ''
+        run: |
+          url=$(sed -n 's/^discussions:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' "${{ steps.folder.outputs.md }}" | head -1)
+          topic=$(echo "$url" | grep -oE '[0-9]+/?$' | tr -d '/')
+          if [ -z "$topic" ]; then
+            echo "could not parse a topic id from discussions: $url"; echo "" > forum.txt
+          else
+            curl -fsSL "https://governance.aave.com/raw/$topic/1" -o forum.txt || echo "(forum fetch failed)" > forum.txt
+          fi
+      - name: Generate the fork diff report
+        id: diff
+        if: steps.folder.outputs.md != ''
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+        run: |
+          forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" -vv || true
+          report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1)
+          if [ -z "$report" ]; then
+            report=$(find diffs -name '*.md' 2>/dev/null | sort | tail -1)
+          fi
+          echo "report=${report:-}" >> "$GITHUB_OUTPUT"
+      - name: Build AI input
+        if: steps.folder.outputs.md != ''
+        run: |
+          {
+            echo "<forum>"; cat forum.txt; echo "</forum>"
+            echo "<proposal-md>"; cat "${{ steps.folder.outputs.md }}"; echo "</proposal-md>"
+            echo "<diff-report>"
+            [ -n "${{ steps.diff.outputs.report }}" ] && cat "${{ steps.diff.outputs.report }}"
+            echo "</diff-report>"
+          } > input.txt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.folder.outputs.md != ''
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          ref: ${{ inputs.workflows_ref }}
+          path: .gh-workflows-ai
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.folder.outputs.md != ''
+        with:
+          python-version: "3.12"
+      - name: Run spec-check AI call
+        if: steps.folder.outputs.md != ''
+        env:
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          AI_API_STYLE: openai
+          AI_API_URL: https://openrouter.ai/api/v1/chat/completions
+          AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: |
+          cp .gh-workflows-ai/prompts/spec-check.md .gh-workflows-ai/prompts/spec-check.md.bak 2>/dev/null || true
+          cd .gh-workflows-ai
+          python3 ai.py spec-check ../input.txt ../ai-out.md
+      - name: Deterministic decimals-scale check
+        if: steps.folder.outputs.md != '' && steps.diff.outputs.report != ''
+        run: |
+          python3 .gh-workflows-ai/scale_check.py "${{ steps.diff.outputs.report }}" > scale-out.txt || true
+      - name: Post one advisory comment
+        if: steps.folder.outputs.md != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+        run: |
+          if [ "$DRY_RUN" != "0" ]; then
+            jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
+            exit 0
+          fi
+          {
+            printf '%s\n' "$MARKER"
+            echo "**Forum-vs-payload spec check (advisory, not a review or approval)**"
+            echo '```text'
+            sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' -e "s/\`/'/g" ai-out.md \
+              | head -c 20000
+            printf '\n'
+            echo '```'
+            if [ -s scale-out.txt ]; then
+              echo "**Decimals sanity bound (deterministic, independent of the AI table above)**"
+              echo '```text'
+              sed -e 's/@/@\xe2\x80\x8b/g' scale-out.txt | head -c 4000
+              echo '```'
+            fi
+          } > comment.md
+          existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
+            '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
+          if [ -n "$existing" ]; then
+            gh api "repos/$REPO/issues/comments/$existing" -X PATCH -F body=@comment.md
+          else
+            gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md
+          fi

@@ -1,0 +1,71 @@
+name: coverage-gate
+description: >-
+  Runs forge coverage and fails if line coverage under a given src path
+  prefix (excluding test/script files) is below a threshold. Single
+  implementation shared by foundry-ci (whole src/) and proposal-checks
+  (payload files only).
+inputs:
+  min_coverage:
+    description: Integer 0-100. 0 skips the gate.
+    required: true
+  path_prefix:
+    description: SF: path prefix in lcov.info to scope coverage to (e.g. "src/").
+    required: false
+    default: "src/"
+  exclude_suffixes:
+    description: Space-separated SF: path suffixes to exclude even inside path_prefix (e.g. ".t.sol scripts/").
+    required: false
+    default: ".t.sol"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MIN_COVERAGE: ${{ inputs.min_coverage }}
+        PATH_PREFIX: ${{ inputs.path_prefix }}
+        EXCLUDE_SUFFIXES: ${{ inputs.exclude_suffixes }}
+      run: |
+        case "$MIN_COVERAGE" in
+          ''|*[!0-9]*) echo "min_coverage must be an integer 0-100, got: $MIN_COVERAGE"; exit 1 ;;
+        esac
+        if [ "$MIN_COVERAGE" -gt 100 ]; then
+          echo "min_coverage must be 0-100, got: $MIN_COVERAGE"; exit 1
+        fi
+        if [ "$MIN_COVERAGE" -eq 0 ]; then
+          echo "min_coverage not set; skipping coverage gate"
+          exit 0
+        fi
+        forge coverage --report lcov --report-file lcov.info
+        covered=0
+        total=0
+        in_scope=0
+        current_file=""
+        while IFS= read -r line; do
+          case "$line" in
+            SF:*)
+              current_file="${line#SF:}"
+              in_scope=0
+              case "$current_file" in
+                "$PATH_PREFIX"*)
+                  in_scope=1
+                  for suf in $EXCLUDE_SUFFIXES; do
+                    case "$current_file" in
+                      *"$suf") in_scope=0 ;;
+                    esac
+                  done
+                  ;;
+              esac
+              ;;
+            LH:*) [ "$in_scope" -eq 1 ] && covered=$((covered + ${line#LH:})) ;;
+            LF:*) [ "$in_scope" -eq 1 ] && total=$((total + ${line#LF:})) ;;
+          esac
+        done < lcov.info
+        if [ "$total" -eq 0 ]; then
+          echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"; exit 1
+        fi
+        pct=$((covered * 100 / total))
+        echo "$PATH_PREFIX line coverage: $pct% ($covered/$total lines), threshold: $MIN_COVERAGE%"
+        if [ "$pct" -lt "$MIN_COVERAGE" ]; then
+          echo "coverage $pct% is below min_coverage $MIN_COVERAGE%"
+          exit 1
+        fi

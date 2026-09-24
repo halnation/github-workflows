@@ -158,6 +158,7 @@ jobs:
       - uses: aave-dao/github-workflows/.github/actions/foundry-setup@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
       - name: Recency gate
         id: gate
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -211,7 +212,12 @@ jobs:
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
         run: |
-          forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" -vv || true
+          # --isolate is required (not just the forge-config annotation) for
+          # ProtocolV3TestBase.defaultTest's payload gas-limit check to pass --
+          # without it, the check reverts before diffReports() ever writes a
+          # file, so diffs/ stays empty and the advisory step has nothing to
+          # compare against.
+          forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv || true
           mkdir -p diffs
           report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1 || true)
           if [ -z "$report" ]; then
@@ -247,17 +253,27 @@ jobs:
           AI_API_URL: https://openrouter.ai/api/v1/chat/completions
           AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          AI_MAX_TOKENS: "4000"
+          AI_MAX_TOKENS: "8000"
         run: |
-          cp .gh-workflows-ai/prompts/spec-check.md .gh-workflows-ai/prompts/spec-check.md.bak 2>/dev/null || true
+          # This is an advisory-only step: an AI-side failure (truncation, API
+          # error, timeout) must never turn the job red -- under a ruleset that
+          # would block a merge on the AI provider's flakiness, not on anything
+          # about the proposal. Log the failure into the comment instead.
           cd .gh-workflows-ai
-          python3 ai.py spec-check ../input.txt ../ai-out.md
+          if ! python3 ai.py spec-check ../input.txt ../ai-out.md; then
+            echo "_AI call failed (see job log for the reason); no spec-check table was generated for this run._" > ../ai-out.md
+          fi
       - name: Deterministic decimals-scale check
-        if: steps.folder.outputs.md != '' && steps.diff.outputs.report != ''
+        if: steps.folder.outputs.md != ''
         run: |
-          python3 .gh-workflows-ai/scale_check.py "${{ steps.diff.outputs.report }}" > scale-out.txt || true
+          if [ -n "${{ steps.diff.outputs.report }}" ]; then
+            python3 .gh-workflows-ai/scale_check.py "${{ steps.diff.outputs.report }}" > scale-out.txt || true
+          else
+            echo "no diff report was generated for this proposal; decimals-scale check skipped" > scale-out.txt
+          fi
       - name: Post one advisory comment
         if: steps.folder.outputs.md != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

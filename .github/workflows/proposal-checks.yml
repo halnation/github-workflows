@@ -236,6 +236,7 @@ jobs:
           AI_API_URL: https://openrouter.ai/api/v1/chat/completions
           AI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          AI_MAX_TOKENS: "4000"
         run: |
           cp .gh-workflows-ai/prompts/spec-check.md .gh-workflows-ai/prompts/spec-check.md.bak 2>/dev/null || true
           cd .gh-workflows-ai

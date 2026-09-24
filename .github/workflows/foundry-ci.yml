@@ -45,7 +45,7 @@ jobs:
       - uses: aave-dao/github-workflows/.github/actions/foundry-lcov-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
         continue-on-error: true
       - name: Coverage threshold (src/ only)
-        uses: halnation/github-workflows/.github/actions/coverage-gate@<github-workflows commit SHA> # REQUIRED: self-pin to this commit once merged (chicken/egg on first commit)
+        uses: halnation/github-workflows/.github/actions/coverage-gate@247fbe1a88b7d9f6c571bae1d3d6fc476a5acd81
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"

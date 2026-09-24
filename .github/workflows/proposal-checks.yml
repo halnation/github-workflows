@@ -186,7 +186,7 @@ jobs:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
       - name: Coverage threshold (payload contracts only)
         id: gate
-        uses: halnation/github-workflows/.github/actions/coverage-gate@abd004cb15dd46774eff1aead729bd5c3574d9ec
+        uses: halnation/github-workflows/.github/actions/coverage-gate@458eb44149158d1f758896d3449f2bcefc290330
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"

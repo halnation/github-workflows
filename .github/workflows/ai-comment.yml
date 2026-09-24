@@ -68,7 +68,50 @@ jobs:
           BODY: ${{ github.event.issue.body }}
         run: |
           if [ "$KIND" = "review" ]; then
-            gh api "repos/$REPO/pulls/$NUMBER" -H "Accept: application/vnd.github.v3.diff" > input.txt
+            owner="${REPO%%/*}"
+            name="${REPO#*/}"
+            gh api "repos/$REPO/pulls/$NUMBER" -H "Accept: application/vnd.github.v3.diff" > diff.txt
+            issue_body=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$num:Int!){
+                repository(owner:$owner,name:$name){
+                  pullRequest(number:$num){
+                    closingIssuesReferences(first:1){ nodes{ body } }
+                  }
+                }
+              }' -f owner="$owner" -f name="$name" -F num="$NUMBER" \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].body // empty')
+            {
+              echo "<linked-issue>"
+              if [ -n "$issue_body" ]; then printf '%s\n' "$issue_body"; else echo "(no linked issue)"; fi
+              echo "</linked-issue>"
+              echo "<pr-diff>"
+              awk '
+                function flush() {
+                  if (path != "") {
+                    skip = (path ~ /(^|\/)(lib|broadcast|out|cache|node_modules)\//) \
+                        || (path ~ /\.lock$/) \
+                        || (path ~ /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/)
+                    if (skip) print "(" path ": " count " lines changed, omitted)"
+                    else print buf
+                  }
+                }
+                /^diff --git / {
+                  flush()
+                  path = $3
+                  sub(/^a\//, "", path)
+                  buf = $0
+                  count = 0
+                  next
+                }
+                {
+                  buf = buf "\n" $0
+                  if ($0 ~ /^[+-]/ && $0 !~ /^(\+\+\+|---)/) count++
+                  next
+                }
+                END { flush() }
+              ' diff.txt
+              echo "</pr-diff>"
+            } > input.txt
           else
             printf '%s' "$BODY" > input.txt
           fi

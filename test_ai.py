@@ -20,6 +20,23 @@ class BuildPromptTests(unittest.TestCase):
         self.assertTrue(open_tag < input_pos < close_tag)
         self.assertIn("Read the issue body below", prompt)  # from prompts/scope.md
 
+    def test_review_input_carries_linked_issue_before_diff_in_order(self):
+        # Mirrors what ai-comment.yml's collect step assembles for kind=review:
+        # the linked issue body, then the (possibly filtered) PR diff, both
+        # inside the single outer <untrusted-input> wrapper.
+        input_text = (
+            "<linked-issue>\nDeliverable: ship the thing\n</linked-issue>\n"
+            "<pr-diff>\ndiff --git a/x b/x\n+1\n</pr-diff>\n"
+        )
+        prompt = ai.build_prompt("review", input_text)
+        outer_open = prompt.index("<untrusted-input>")
+        issue_open = prompt.index("<linked-issue>")
+        issue_close = prompt.index("</linked-issue>")
+        diff_open = prompt.index("<pr-diff>")
+        diff_close = prompt.index("</pr-diff>")
+        outer_close = prompt.index("</untrusted-input>")
+        self.assertTrue(outer_open < issue_open < issue_close < diff_open < diff_close < outer_close)
+
 
 class ThinkStripTests(unittest.TestCase):
     def test_strips_closed_block_non_greedily_across_multiple_blocks(self):

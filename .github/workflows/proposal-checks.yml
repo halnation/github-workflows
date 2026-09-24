@@ -236,6 +236,11 @@ jobs:
           fi
           echo "report=${report:-}" >> "$GITHUB_OUTPUT"
           echo "source=regenerated" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        if: steps.diff.outputs.source == 'regenerated' && steps.diff.outputs.report != ''
+        with:
+          name: regenerated-diffs
+          path: diffs/
       - name: Build AI input
         if: steps.folder.outputs.md != ''
         run: |
@@ -291,13 +296,19 @@ jobs:
           REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
           DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
+          DIFF_SOURCE: ${{ steps.diff.outputs.source }}
         run: |
           if [ "$DRY_RUN" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
             exit 0
           fi
           python3 .gh-workflows-ai/render_advisory_comment.py ai-out.md scale-out.txt body.md
-          { printf '%s\n' "$MARKER"; cat body.md; } > comment.md
+          if [ "$DIFF_SOURCE" = "committed" ]; then
+            diff_note="_Diff report: committed by the author._"
+          else
+            diff_note="_Diff report: regenerated in CI (none was committed)._"
+          fi
+          { printf '%s\n' "$MARKER"; printf '%s\n\n' "$diff_note"; cat body.md; } > comment.md
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
             '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
           if [ -n "$existing" ]; then

@@ -83,7 +83,7 @@ jobs:
               *"$addr_lc"*) ;;
               *)
                 echo "::error file=$file,line=$lineno::raw address $addr not found in lib/aave-address-book -- use the AaveVX.NAME constant or add it to the address book"
-                details="${details}${file}:${lineno}: raw address ${addr} not in the address book$(printf '\n')"
+                details="${details}${file}|${lineno}|raw address ${addr} not in the address book$(printf '\n')"
                 fail=1
                 ;;
             esac
@@ -160,10 +160,20 @@ jobs:
           status=$?
           set -e
           cat cspell-out.txt
+          detail=""
           if [ "$status" -ne 0 ]; then
-            detail=$(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
-          else
-            detail=""
+            while IFS= read -r hit; do
+              [ -z "$hit" ] && continue
+              hfile="${hit%%:*}"
+              rest="${hit#*:}"
+              hline="${rest%%:*}"
+              rest="${rest#*:}"
+              rest="${rest#*- }"
+              word=$(printf '%s' "$rest" | sed -n 's/.*Unknown word (\([^)]*\)).*/\1/p')
+              sugg=$(printf '%s' "$rest" | sed -n 's/.*fix: (\([^)]*\)).*/\1/p')
+              context=$(sed -n "${hline}p" "$hfile" 2>/dev/null | cut -c1-80)
+              detail="${detail}${hfile}|${hline}|${word}|${sugg}|${context}$(printf '\n')"
+            done < <(grep -E '^[^ ].*:[0-9]+:[0-9]+' cspell-out.txt | head -15 || true)
           fi
           echo "details=$(printf '%s' "$detail" | base64 -w0)" >> "$GITHUB_OUTPUT"
           exit $status
@@ -204,6 +214,7 @@ jobs:
       issues: write
     outputs:
       comment_url: ${{ steps.post.outputs.comment_url }}
+      has_issues: ${{ steps.post.outputs.has_issues }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -357,7 +368,8 @@ jobs:
             jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
             exit 0
           fi
-          python3 .gh-workflows-ai/render_advisory_comment.py ai-out.md scale-out.txt body.md
+          diff_report_path="${{ steps.diff.outputs.report }}"
+          python3 .gh-workflows-ai/render_advisory_comment.py ai-out.md "${diff_report_path:-/dev/null}" scale-out.txt body.md
           if [ "$DIFF_SOURCE" = "committed" ]; then
             diff_note="_Diff report: committed by the author._"
           else
@@ -372,6 +384,11 @@ jobs:
             comment_id=$(gh api "repos/$REPO/issues/$NUMBER/comments" -X POST -F body=@comment.md --jq .id)
           fi
           echo "comment_url=${{ github.event.pull_request.html_url }}#issuecomment-$comment_id" >> "$GITHUB_OUTPUT"
+          if grep -qE '\[!(WARNING|CAUTION)\]' body.md; then
+            echo "has_issues=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_issues=0" >> "$GITHUB_OUTPUT"
+          fi
 
   summary:
     needs: [address-book, spelling, coverage, advisory]
@@ -410,6 +427,9 @@ jobs:
           COVERAGE_PCT: ${{ needs.coverage.outputs.pct }}
           COVERAGE_MIN: ${{ needs.coverage.outputs.min_coverage }}
           ADVISORY_URL: ${{ needs.advisory.outputs.comment_url }}
+          ADVISORY_HAS_ISSUES: ${{ needs.advisory.outputs.has_issues }}
+          REPO_FULL: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # details/uncovered_sample are base64 on the wire (see the
           # producing jobs) -- multi-line `name<<EOF...EOF` GITHUB_OUTPUT
@@ -419,11 +439,14 @@ jobs:
           cov_d_plain=$(printf '%s' "$DETAILS_COVERAGE" | base64 -d 2>/dev/null || true)
           jq -n \
             --arg ab "$RESULT_ADDRESS_BOOK" --arg sp "$RESULT_SPELLING" \
-            --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" \
+            --arg cov "$RESULT_COVERAGE" --arg adv "$RESULT_ADVISORY" --arg adv_issues "$ADVISORY_HAS_ISSUES" \
             --arg ab_d "$ab_d_plain" --arg sp_d "$sp_d_plain" --arg cov_d "$cov_d_plain" \
             --arg cov_pct "$COVERAGE_PCT" --arg cov_min "$COVERAGE_MIN" --arg adv_url "$ADVISORY_URL" \
+            --arg repo "$REPO_FULL" --arg head_sha "$HEAD_SHA" \
             '{
               results: {"address-book": $ab, spelling: $sp, coverage: $cov, advisory: $adv},
+              advisory_has_issues: ($adv_issues == "1"),
+              repo: $repo, head_sha: $head_sha,
               details: {"address-book": $ab_d, spelling: $sp_d, coverage: $cov_d},
               coverage_pct: $cov_pct, coverage_min: $cov_min, advisory_url: $adv_url
             }' > summary_payload.json

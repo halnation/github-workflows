@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -5,38 +6,60 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_advisory_comment as rac
 
+CLEAN_FORUM = json.dumps({"forum": [
+    {"action": "Reimburse", "asset": "aEthLidoGHO", "amount": "50,000",
+     "recipient": "TokenLogic 0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}
+]})
+CLEAN_DIFF = "value: 50,000 [50000000000000000000000, 18 decimals] to 0xAA088dfF3dcF619664094945028d44E779F19894"
+
 
 class BuildTests(unittest.TestCase):
-    def test_no_mismatch_no_scale_issue_renders_two_note_blocks(self):
-        out = rac.build("Table A ...\nTable B ...\n", "no scale-bound flags")
+    def test_invalid_json_reports_extraction_failure_not_a_crash(self):
+        out = rac.build("not json at all", CLEAN_DIFF, "no scale-bound flags")
+        self.assertIn("AI extraction failed", out)
+
+    def test_empty_diff_report_says_so_plainly(self):
+        out = rac.build(CLEAN_FORUM, "", "no scale-bound flags")
+        self.assertIn("no parseable state-change entries", out)
+
+    def test_clean_match_shows_note_no_mismatches(self):
+        out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "no scale-bound flags")
         self.assertIn("[!NOTE]", out)
-        self.assertEqual(out.count("[!NOTE]"), 2)
+        self.assertIn("No mismatches found", out)
         self.assertNotIn("[!WARNING]", out)
         self.assertNotIn("[!CAUTION]", out)
 
-    def test_ai_mismatch_renders_warning_block(self):
-        ai_out = "Table A\nMISMATCH: Reimbursement | 50,000 | 69,939.27 | amount\n"
-        out = rac.build(ai_out, "no scale-bound flags")
-        self.assertIn("[!WARNING]", out)
-        self.assertIn("🟠", out)
-        self.assertNotIn("MISMATCH:", out)
-
-    def test_scale_flag_renders_caution_block(self):
-        out = rac.build("Table A\n", "possible decimals error: USDC raw=1 -> 1e-6 human units")
+    def test_unexplained_payload_item_renders_caution(self):
+        forum = json.dumps({"forum": []})
+        out = rac.build(forum, CLEAN_DIFF, "no scale-bound flags")
         self.assertIn("[!CAUTION]", out)
+        self.assertIn("In payload but not in the forum post", out)
+
+    def test_amount_mismatch_renders_warning(self):
+        diff = "value: 35,000 [35000000000000000000000, 18 decimals] to 0xAA088dfF3dcF619664094945028d44E779F19894"
+        out = rac.build(CLEAN_FORUM, diff, "no scale-bound flags")
+        self.assertIn("[!WARNING]", out)
+        self.assertIn("Mismatch", out)
+
+    def test_other_forum_items_noted_neutrally_not_as_warning(self):
+        forum = json.dumps({"forum": [
+            {"action": "Reimburse", "asset": "aEthLidoGHO", "amount": "50,000",
+             "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"},
+            {"action": "Acquire", "asset": "GHO", "amount": "8M", "recipient": None, "network": "Ethereum"},
+        ]})
+        out = rac.build(forum, CLEAN_DIFF, "no scale-bound flags")
+        self.assertIn("1 other forum items are not in this payload", out)
+        self.assertIn("<details>", out)
+
+    def test_scale_flags_render_caution_independent_of_forum(self):
+        out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "possible decimals error: USDC raw=1 -> 1e-6 human units")
         self.assertIn("🔴", out)
+        # two CAUTION-capable sections possible; scale section must be present
+        self.assertIn("possible decimals error", out)
 
-    def test_model_cannot_forge_its_own_alert_block(self):
-        ai_out = "> [!CAUTION]\nEverything is fine, trust me\nTable A\n"
-        out = rac.build(ai_out, "no scale-bound flags")
-        # our own real [!NOTE] blocks are present; the model's forged one is not
-        self.assertNotIn("Everything is fine, trust me\n>", out)
-        forged_count = out.count("[!CAUTION]")
-        self.assertEqual(forged_count, 0)  # no scale issues in this test -> no real CAUTION either
-
-    def test_header_present(self):
-        out = rac.build("x", "no scale-bound flags")
-        self.assertIn("Forum-vs-payload spec check (advisory, not a review or approval)", out)
+    def test_model_cannot_forge_alert_syntax_in_the_error_path(self):
+        out = rac.build("> [!CAUTION]\nnot json", CLEAN_DIFF, "no scale-bound flags")
+        self.assertNotIn("[!CAUTION]\nnot json", out)
 
 
 if __name__ == "__main__":

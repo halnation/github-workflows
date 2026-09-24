@@ -53,9 +53,8 @@ commit references, so public is the correct shape regardless).
 | `BOARD_APP_ID` | repository/org variable | `board.yml`, minting the board App token |
 | `BOARD_APP_PRIVATE_KEY` | repository/org secret | `board.yml`, minting the board App token |
 | `ANTHROPIC_API_KEY` | secret, `backend: anthropic` only, private repos only | `ai.yml`, `generate` only |
-| `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET` | secrets, `backend: local` only | `ai.yml`, `generate` only, to join the tailnet |
-| `LOCAL_LLM_URL` | secret, `backend: local` only | `ai.yml`, `generate` only, the llama.cpp endpoint |
-| `LOCAL_LLM_MODEL` | repository/org variable, `backend: local` only | `ai.yml`, `generate` only |
+| `OPENROUTER_API_KEY` | secret, `backend: openrouter` only | `ai.yml`, `generate` only |
+| `OPENROUTER_MODEL` | repository/org variable, `backend: openrouter` only | `ai.yml`, `generate` only |
 
 Before use, replace the `ref: 0000...0` placeholders in `pr-board.yml` (board-app),
 `ai-comment.yml` (this repo's own commit, for the `generate` job's pinned checkout),
@@ -122,36 +121,22 @@ PR/issue number serialises overlapping runs so two quick pushes can't both post.
 
 ### Backends
 
-`ai-comment.yml` takes an input `backend`, `anthropic` (default) or `local`:
+`ai-comment.yml` takes an input `backend`, `anthropic` (default) or `openrouter`:
 
 - `anthropic`: `generate` calls the Anthropic Messages API with `ANTHROPIC_API_KEY`.
   Unchanged from before.
-- `local`: `generate` first joins the team tailnet (`tailscale/github-action`,
-  pinned to a commit SHA) using an OAuth client (`TS_OAUTH_CLIENT_ID`/
-  `TS_OAUTH_SECRET` secrets, tag `tag:ci`), then calls an OpenAI-compatible
-  endpoint -- the team's llama.cpp server on a desktop machine, reached over
-  Tailscale at `LOCAL_LLM_URL` (secret) with model `LOCAL_LLM_MODEL` (var) and
-  `AI_MAX_TOKENS=4096` (the 27B reasoning model needs headroom for `<think>`
-  output, which `ai.py` strips before posting). The Tailscale secrets and the
-  local-LLM values are visible only to `generate`; `collect` and `post` never
-  see them, and `generate` still runs with `permissions: {}` and no GitHub
-  token -- joining the tailnet doesn't change that.
+- `openrouter`: `generate` calls OpenRouter's OpenAI-compatible chat-completions
+  endpoint (`https://openrouter.ai/api/v1/chat/completions`) with
+  `OPENROUTER_API_KEY` (secret, sent as `Authorization: Bearer`) and model
+  `OPENROUTER_MODEL` (repository/org variable, e.g. an OpenRouter model id such
+  as `anthropic/claude-sonnet-5`). `OPENROUTER_API_KEY` is visible only to
+  `generate`; `collect` and `post` never see it, and `generate` still runs with
+  `permissions: {}` and no GitHub token.
 
-Tailnet ACL note: `tag:ci` is expected to be scoped in the tailnet's ACL to
-reach only the desktop's port 8080, not the rest of the tailnet -- verify this
-in the ACL before relying on it, this repository doesn't control it.
-
-The `Join tailnet` step is deliberately the last step before `Run ai.py` in
-`generate`, and no step in `generate` ever checks out or reads PR/issue
-content (only the pinned `github-workflows` repo and the already-downloaded
-`ai-input` artifact) -- `tailscaled` therefore only ever inherits that step's
-own environment, never PR-controlled data or the Anthropic/local-LLM secrets,
-which are scoped to the following `Run ai.py` step.
-
-**Desktop off = the AI comment job fails; nothing else is affected.** The
-local backend has no fallback to Anthropic -- if the desktop or its llama.cpp
-server is unreachable, `generate` fails and no AI comment is posted, but
-`ci`/`report`/`board` are independent workflows and keep working normally.
+  OpenRouter is a third-party router: PR diffs and issue bodies sent through it
+  leave TokenLogic's and Anthropic's infrastructure. Set the OpenRouter
+  account's data policy to disallow training on and logging of prompts/completions
+  before enabling this backend on a private repository.
 
 Run `ai.py` locally in dry mode (the default unless `DRY_RUN=0`):
 

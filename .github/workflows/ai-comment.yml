@@ -19,6 +19,8 @@ on:
         required: false
       OPENROUTER_API_KEY:
         required: false
+      BOARD_APP_PRIVATE_KEY:
+        required: false
 permissions: {}
 defaults:
   run:
@@ -58,10 +60,23 @@ jobs:
           if [ -z "$last" ] || [[ "$last" < "$cutoff" ]]; then
             echo "number=$number" >> "$GITHUB_OUTPUT"
           fi
+      - name: Mint read-only app token for cross-repo issue lookup
+        id: mint
+        if: steps.gate.outputs.number != '' && inputs.kind == 'review'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.BOARD_APP_ID }}
+          private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},General-Task
+          permission-pull-requests: read
+          permission-issues: read
+          permission-contents: read
       - name: Collect the subject
         if: steps.gate.outputs.number != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          ISSUE_TOKEN: ${{ steps.mint.outputs.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ steps.gate.outputs.number }}
           KIND: ${{ inputs.kind }}
@@ -71,7 +86,7 @@ jobs:
             owner="${REPO%%/*}"
             name="${REPO#*/}"
             gh api "repos/$REPO/pulls/$NUMBER" -H "Accept: application/vnd.github.v3.diff" > diff.txt
-            issue_body=$(gh api graphql -f query='
+            issue_body=$(GH_TOKEN="$ISSUE_TOKEN" gh api graphql -f query='
               query($owner:String!,$name:String!,$num:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$num){
@@ -180,6 +195,7 @@ jobs:
             echo '```text'
             sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' -e "s/\`/'/g" out.md \
               | head -c "$AI_OUTPUT_CAP"
+            printf '\n'
             echo '```'
           } > comment.md
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \

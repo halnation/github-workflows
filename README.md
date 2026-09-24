@@ -25,6 +25,31 @@ for AI scope notes on newly opened issues; its board sync already lives in
 Every caller passes `dry_run: true` in these examples; flip to `false` only for an
 approved live window (Principle 4: dry mode is the default everywhere).
 
+### Coverage threshold
+
+`foundry-ci.yml` takes an optional input `min_coverage` (number, default `0` = off).
+When greater than 0, the `test` job runs `forge coverage --report lcov`, sums line
+coverage (`LH`/`LF`) only for records under `src/` (test/, script/, lib/ excluded),
+prints the resulting percentage, and fails the job if it is below the threshold.
+The value is validated as an integer 0-100; anything else fails the job closed.
+Example, in a delivering repository's `ci.yml`:
+
+```yaml
+jobs:
+  test:
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@<github-workflows commit SHA>"
+    with:
+      min_coverage: 80
+    secrets:
+      ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+      QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
+      QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
+```
+
+An org ruleset that marks `ci` a required workflow calls it centrally with no
+per-repo `with:` block, so `min_coverage` cannot be set that way -- it only takes
+effect when the delivering repository's own `ci.yml` calls `foundry-ci.yml` directly.
+
 ## GitHub App installation
 
 The board App must be installed on **the caller repository, `General-Task`, and
@@ -50,8 +75,8 @@ commit references, so public is the correct shape regardless).
 | Name | Kind | Used by |
 |---|---|---|
 | `ALCHEMY_API_KEY`, `QUICKNODE_TOKEN`, `QUICKNODE_ENDPOINT_NAME` | secrets (optional) | `ci.yml`, forwarded to the fork-RPC action |
-| `BOARD_APP_ID` | repository/org variable | `board.yml`, minting the board App token |
-| `BOARD_APP_PRIVATE_KEY` | repository/org secret | `board.yml`, minting the board App token |
+| `BOARD_APP_ID` | repository/org variable | `board.yml`, minting the board App token; also `ai.yml`'s `collect` job (`kind: review`), minting a read-only token to read a linked issue that lives in another repo |
+| `BOARD_APP_PRIVATE_KEY` | repository/org secret | `board.yml`, minting the board App token; also `ai.yml`'s `collect` job (`kind: review`), same purpose |
 | `ANTHROPIC_API_KEY` | secret, `backend: anthropic` only, private repos only | `ai.yml`, `generate` only |
 | `OPENROUTER_API_KEY` | secret, `backend: openrouter` only | `ai.yml`, `generate` only |
 | `OPENROUTER_MODEL` | repository/org variable, `backend: openrouter` only | `ai.yml`, `generate` only |
@@ -111,7 +136,21 @@ run instead of posting a bare marker. The posted comment is a fixed header
 ("AI note (advisory, not a review)") followed by the model's text inside a fenced
 `text` block, with `@` mentions zero-width-split and `<!--`/`-->`/backticks
 neutralised so prompt-injected content can't forge markers, escape the fence, or
-mention people.
+mention people. `post` always emits a newline before the closing fence, even when
+the model's text does not end in one and `head -c "$AI_OUTPUT_CAP"` truncates
+mid-line -- otherwise the closing ` ``` ` glues onto the last line of AI text and
+never renders as a fence.
+
+`collect` (`kind: review`) reads the diff's linked issue via GraphQL
+`closingIssuesReferences`. That issue can live in a different repository (e.g. the
+caller's `General-Task` issue), and `github.token` is scoped to the caller repo
+only, so the query would silently return no body for a cross-repo issue. `collect`
+mints a read-only App token (`repositories: <caller>,General-Task`,
+`permission-issues: read`, `permission-pull-requests: read`,
+`permission-contents: read` -- same shape as `pr-board.yml`'s `pr-issue-check`
+token) and uses it only for that one GraphQL call; the diff fetch and the
+recency-gate lookups keep using `github.token`, since those only ever touch the
+caller repo.
 
 Dedup/recency: `collect`'s gate and `post`'s dedup lookup both paginate
 (`gh api --paginate | jq -rs`) and match only comments containing the hidden

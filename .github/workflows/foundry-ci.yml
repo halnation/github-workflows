@@ -1,6 +1,10 @@
 name: foundry-ci
 on:
   workflow_call:
+    inputs:
+      min_coverage:
+        type: number
+        default: 0
     secrets:
       ALCHEMY_API_KEY:
         required: false
@@ -40,6 +44,41 @@ jobs:
         continue-on-error: true
       - uses: aave-dao/github-workflows/.github/actions/foundry-lcov-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
         continue-on-error: true
+      - name: Coverage threshold (src/ only)
+        env:
+          MIN_COVERAGE: ${{ inputs.min_coverage }}
+        run: |
+          case "$MIN_COVERAGE" in
+            ''|*[!0-9]*) echo "min_coverage must be an integer 0-100, got: $MIN_COVERAGE"; exit 1 ;;
+          esac
+          if [ "$MIN_COVERAGE" -gt 100 ]; then
+            echo "min_coverage must be 0-100, got: $MIN_COVERAGE"; exit 1
+          fi
+          if [ "$MIN_COVERAGE" -eq 0 ]; then
+            echo "min_coverage not set; skipping coverage gate"
+            exit 0
+          fi
+          forge coverage --report lcov --report-file lcov.info
+          covered=0
+          total=0
+          in_src=0
+          while IFS= read -r line; do
+            case "$line" in
+              SF:src/*) in_src=1 ;;
+              SF:*) in_src=0 ;;
+              LH:*) [ "$in_src" -eq 1 ] && covered=$((covered + ${line#LH:})) ;;
+              LF:*) [ "$in_src" -eq 1 ] && total=$((total + ${line#LF:})) ;;
+            esac
+          done < lcov.info
+          if [ "$total" -eq 0 ]; then
+            echo "no coverage data found for src/"; exit 1
+          fi
+          pct=$((covered * 100 / total))
+          echo "src/ line coverage: $pct% ($covered/$total lines), threshold: $MIN_COVERAGE%"
+          if [ "$pct" -lt "$MIN_COVERAGE" ]; then
+            echo "coverage $pct% is below min_coverage $MIN_COVERAGE%"
+            exit 1
+          fi
       - name: Save PR metadata
         if: github.event_name == 'pull_request'
         env:

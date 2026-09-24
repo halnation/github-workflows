@@ -212,11 +212,22 @@ jobs:
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
         run: |
-          # --isolate is required (not just the forge-config annotation) for
-          # ProtocolV3TestBase.defaultTest's payload gas-limit check to pass --
-          # without it, the check reverts before diffReports() ever writes a
-          # file, so diffs/ stays empty and the advisory step has nothing to
-          # compare against.
+          # Like upstream aave-proposals-v3, the author commits diffs/*.md
+          # generated locally by the fork test -- so check the committed repo
+          # state FIRST, and only fall back to regenerating in CI (which needs
+          # --isolate, not just the forge-config annotation, for
+          # ProtocolV3TestBase.defaultTest's payload gas-limit check to pass;
+          # without it the check reverts before diffReports() ever writes a
+          # file) when nothing was committed.
+          proposal_name=$(basename "${{ steps.folder.outputs.dir }}" | sed -E 's/^[0-9]{8}_//')
+          committed=$(find diffs -name "*${proposal_name}*.md" 2>/dev/null | sort | tail -1 || true)
+          if [ -n "$committed" ]; then
+            echo "using committed diff report: $committed"
+            echo "report=$committed" >> "$GITHUB_OUTPUT"
+            echo "source=committed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "no committed diff report found for $proposal_name; regenerating in CI"
           forge test --match-path "${{ steps.folder.outputs.dir }}/*.t.sol" --isolate -vv || true
           mkdir -p diffs
           report=$(find diffs -newer "${{ steps.folder.outputs.md }}" -name '*.md' 2>/dev/null | head -1 || true)
@@ -224,6 +235,7 @@ jobs:
             report=$(find diffs -name '*.md' 2>/dev/null | sort | tail -1 || true)
           fi
           echo "report=${report:-}" >> "$GITHUB_OUTPUT"
+          echo "source=regenerated" >> "$GITHUB_OUTPUT"
       - name: Build AI input
         if: steps.folder.outputs.md != ''
         run: |
@@ -284,21 +296,8 @@ jobs:
             jq -nc --arg n "$NUMBER" '{would:"proposal-spec-comment",number:$n}' >&2
             exit 0
           fi
-          {
-            printf '%s\n' "$MARKER"
-            echo "**Forum-vs-payload spec check (advisory, not a review or approval)**"
-            echo '```text'
-            sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' -e "s/\`/'/g" ai-out.md \
-              | head -c 20000
-            printf '\n'
-            echo '```'
-            if [ -s scale-out.txt ]; then
-              echo "**Decimals sanity bound (deterministic, independent of the AI table above)**"
-              echo '```text'
-              sed -e 's/@/@\xe2\x80\x8b/g' scale-out.txt | head -c 4000
-              echo '```'
-            fi
-          } > comment.md
+          python3 .gh-workflows-ai/render_advisory_comment.py ai-out.md scale-out.txt body.md
+          { printf '%s\n' "$MARKER"; cat body.md; } > comment.md
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
             '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')
           if [ -n "$existing" ]; then

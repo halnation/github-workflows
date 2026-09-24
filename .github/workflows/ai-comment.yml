@@ -173,12 +173,22 @@ jobs:
     needs: [collect, generate]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
       pull-requests: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ai-output
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/github-workflows
+          ref: ${{ inputs.workflows_ref }}
+          path: .gh-workflows-sanitize
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - name: Cap and post comment
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,14 +199,13 @@ jobs:
             jq -nc --arg n "$NUMBER" '{would:"ai-comment",number:$n}' >&2
             exit 0
           fi
+          # Rendered markdown, not a ```text fence -- sanitize.py (shared with
+          # proposal-checks' advisory comment) is what makes that safe.
+          body=$(python3 .gh-workflows-sanitize/sanitize.py out.md "$AI_OUTPUT_CAP")
           {
             printf '%s\n' "$MARKER"
             echo "**AI note (advisory, not a review)**"
-            echo '```text'
-            sed -e 's/@/@\xe2\x80\x8b/g' -e 's/<!--/[comment]/g' -e 's/-->/[\/comment]/g' -e "s/\`/'/g" out.md \
-              | head -c "$AI_OUTPUT_CAP"
-            printf '\n'
-            echo '```'
+            printf '%s\n' "$body"
           } > comment.md
           existing=$(gh api --paginate "repos/$REPO/issues/$NUMBER/comments" | jq -rs --arg m "$MARKER" \
             '[.[][]|select(.user.login=="github-actions[bot]" and (.body|contains($m)))|.id]|max // empty')

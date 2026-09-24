@@ -10,9 +10,10 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-    uses: TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@0000000000000000000000000000000000000000
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/ai-comment.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     with:
       kind: ${{ github.event_name == 'pull_request' && 'review' || 'scope' }}
+      workflows_ref: "<github-workflows commit SHA>" # REQUIRED: same commit as the pin above
       backend: openrouter
       dry_run: true
     secrets:

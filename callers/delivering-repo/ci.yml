@@ -8,7 +8,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@0000000000000000000000000000000000000000
+    uses: "TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@<github-workflows commit SHA>" # REQUIRED: pin to the reviewed github-workflows commit
     secrets:
       ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
       QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}

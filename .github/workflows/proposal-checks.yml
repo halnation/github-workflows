@@ -176,14 +176,24 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          md=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/**/*.md' | head -1)
+          # The changed proposal folder is whichever src/<folder>/ has ANY changed
+          # file (.sol/.t.sol/.md) -- a case that only edits the payload .sol (no .md
+          # change) must still resolve to that folder's (unchanged) .md, or the
+          # advisory step has nothing to compare against and silently no-ops.
+          dir=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'src/*/*' | head -1 | xargs -r dirname)
+          if [ -z "$dir" ]; then
+            echo "no changed proposal folder in this PR; skipping advisory step"
+            echo "md=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          md=$(find "$dir" -maxdepth 1 -name '*.md' | head -1)
           if [ -z "$md" ]; then
-            echo "no changed proposal .md in this PR; skipping advisory step"
+            echo "changed folder $dir has no .md; skipping advisory step"
             echo "md=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "md=$md" >> "$GITHUB_OUTPUT"
-          echo "dir=$(dirname "$md")" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
       - name: Fetch forum raw text
         id: forum
         if: steps.folder.outputs.md != ''

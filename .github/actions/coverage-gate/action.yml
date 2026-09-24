@@ -9,11 +9,11 @@ inputs:
     description: Integer 0-100. 0 skips the gate.
     required: true
   path_prefix:
-    description: SF: path prefix in lcov.info to scope coverage to (e.g. "src/").
+    description: "SF: path prefix in lcov.info to scope coverage to (e.g. src/)."
     required: false
     default: "src/"
   exclude_suffixes:
-    description: Space-separated SF: path suffixes to exclude even inside path_prefix (e.g. ".t.sol scripts/").
+    description: "Space-separated SF: path suffixes to exclude even inside path_prefix (e.g. .t.sol scripts/)."
     required: false
     default: ".t.sol"
 runs:

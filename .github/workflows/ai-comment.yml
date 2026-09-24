@@ -152,6 +152,7 @@ jobs:
           AI_API_URL: ${{ inputs.backend == 'openrouter' && 'https://openrouter.ai/api/v1/chat/completions' || '' }}
           AI_API_KEY: ${{ inputs.backend == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
           AI_MODEL: ${{ inputs.backend == 'openrouter' && vars.OPENROUTER_MODEL || '' }}
+          AI_REASONING_EFFORT: ${{ inputs.backend == 'openrouter' && 'low' || '' }}
           KIND: ${{ inputs.kind }}
           BACKEND: ${{ inputs.backend }}
         run: |

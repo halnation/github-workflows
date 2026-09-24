@@ -29,10 +29,13 @@ jobs:
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
           QUICKNODE_TOKEN: ${{ secrets.QUICKNODE_TOKEN }}
           QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
-      - run: forge build
-      - run: forge test -vvv
+      - run: forge build --deny notes
+      - name: forge test
+        env:
+          FOUNDRY_FUZZ_RUNS: ${{ github.event_name == 'pull_request' && '5000' || '10000' }}
+        run: forge test -vvv
       - uses: aave-dao/github-workflows/.github/actions/foundry-size@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
-        continue-on-error: true
+      - run: forge build --sizes
       - uses: aave-dao/github-workflows/.github/actions/foundry-gas-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6
         continue-on-error: true
       - uses: aave-dao/github-workflows/.github/actions/foundry-lcov-report@f3d4a12c202dcfbea2f34928e730dd53d61d91f6

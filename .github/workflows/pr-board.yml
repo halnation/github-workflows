@@ -8,6 +8,9 @@ on:
       dry_run:
         type: boolean
         default: true
+      config:
+        type: string
+        default: board-app/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY:
         required: true
@@ -60,4 +63,5 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.mint-ro.outputs.token || steps.mint-full.outputs.token }}
           COMMAND: ${{ inputs.command }}
-        run: python3 board-app/board.py "$COMMAND" --event "$GITHUB_EVENT_PATH" --config board-app/config.json
+          BOARD_CONFIG: ${{ inputs.config }}
+        run: python3 board-app/board.py "$COMMAND" --event "$GITHUB_EVENT_PATH" --config "$BOARD_CONFIG"

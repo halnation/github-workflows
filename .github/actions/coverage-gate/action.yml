@@ -28,14 +28,20 @@ inputs:
 outputs:
   pct:
     description: Measured line coverage percentage under path_prefix (empty if the gate was skipped).
-    value: ${{ steps.run.outputs.pct }}
+    value: ${{ steps.measure.outputs.pct }}
   uncovered_sample:
     description: Up to 15 "file:line" entries with zero hits under path_prefix, newline-separated.
-    value: ${{ steps.run.outputs.uncovered_sample }}
+    value: ${{ steps.measure.outputs.uncovered_sample }}
 runs:
   using: composite
   steps:
-    - id: run
+    # Split into measure (always succeeds) + enforce (fails the gate): a
+    # composite-action step that exits non-zero does not reliably propagate
+    # the outputs it wrote via GITHUB_OUTPUT beforehand (observed empirically
+    # -- "Set output 'pct'" never appears in the runner log for a failing
+    # step), so the threshold failure must live in a step AFTER outputs are
+    # already recorded by a step that exits 0.
+    - id: measure
       shell: bash
       env:
         MIN_COVERAGE: ${{ inputs.min_coverage }}
@@ -51,6 +57,8 @@ runs:
         fi
         if [ "$MIN_COVERAGE" -eq 0 ]; then
           echo "min_coverage not set; skipping coverage gate"
+          echo "pct=" >> "$GITHUB_OUTPUT"
+          { echo "uncovered_sample<<COVERAGE_EOF"; echo "COVERAGE_EOF"; } >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [ -n "$NO_MATCH_TEST" ]; then
@@ -103,12 +111,26 @@ runs:
         } >> "$GITHUB_OUTPUT"
         if [ "$total" -eq 0 ]; then
           echo "pct=" >> "$GITHUB_OUTPUT"
-          echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"; exit 1
+          echo "no coverage data found under $PATH_PREFIX (excluding: $EXCLUDE_SUFFIXES)"
+          echo "status=no-data" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
         pct=$((covered * 100 / total))
         echo "pct=$pct" >> "$GITHUB_OUTPUT"
         echo "$PATH_PREFIX line coverage: $pct% ($covered/$total lines), threshold: $MIN_COVERAGE%"
         if [ "$pct" -lt "$MIN_COVERAGE" ]; then
-          echo "coverage $pct% is below min_coverage $MIN_COVERAGE%"
-          exit 1
+          echo "status=below-threshold" >> "$GITHUB_OUTPUT"
+        else
+          echo "status=ok" >> "$GITHUB_OUTPUT"
         fi
+    - id: enforce
+      shell: bash
+      env:
+        STATUS: ${{ steps.measure.outputs.status }}
+      run: |
+        case "$STATUS" in
+          ok|"") exit 0 ;;
+          no-data) echo "no coverage data found in scope"; exit 1 ;;
+          below-threshold) echo "coverage is below the required threshold"; exit 1 ;;
+          *) echo "unexpected coverage-gate status: $STATUS"; exit 1 ;;
+        esac

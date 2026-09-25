@@ -1,43 +1,57 @@
 # github-workflows
 
-Reusable CI/PR/AI workflows for TokenLogic delivering repositories, called by short
-caller files (see `callers/delivering-repo/`). This repository never talks to the
-project board's API directly -- `board.py` in `board-app` is the only code that
-reads or writes issues and the board. See `PLAN.md` for the design.
+Reusable CI/PR/AI workflows for TokenLogic repositories, called by short
+caller files copied into each repo (see `callers/delivering-repo/`). This
+repo is private: `ai-comment.yml` and `proposal-checks.yml` fetch their
+scripts through `.github/actions/scripts@main`, so they always follow
+`main` — GitHub fetches that composite action itself, the same mechanism
+`coverage-gate` uses, so no token is needed. The org's Actions access
+setting on this repo must allow org repositories.
 
-## Adding the callers to a delivering repository
+## Reusable workflows
 
-Copy the four files from `callers/delivering-repo/` into the repository's own
-`.github/workflows/`, replacing the placeholder `@000...0` refs with the commit SHA
-of the reviewed `github-workflows` revision:
+| Workflow | Purpose | Key inputs | Secrets |
+|---|---|---|---|
+| `foundry-ci.yml` | `forge fmt`/`build`/`test`/`sizes`/gas report + optional coverage gate | `min_coverage` (0-100, default 0=off) | `ALCHEMY_API_KEY`, `QUICKNODE_TOKEN`, `QUICKNODE_ENDPOINT_NAME` |
+| `pr-board.yml` | Syncs a PR/issue to the project board (`command: pr-issue-check` or `pr-sync`) | `command`, `board_app_ref`, `dry_run` | `BOARD_APP_PRIVATE_KEY` |
+| `ai-comment.yml` | Posts an advisory AI comment: a PR review (`kind: review`, only on an `ai-review` label add) or an issue scope check (`kind: scope`, on issue open) | `kind`, `backend` (`anthropic`/`openrouter`), `dry_run`, `board_app_ref`, `discord_bot_ref`, `config` | `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`, `BOARD_APP_PRIVATE_KEY`, `DISCORD_BOT_TOKEN` |
+| `report-comment.yml` | Posts a CI result comment on the triggering PR, `workflow_run`-based | `workflow-name`, `dry_run` | none |
+| `proposal-checks.yml` | Governance-proposal gate: address-book + spelling + coverage (blocking), forum-vs-diff spec check + decimals sanity (advisory) | `min_coverage`, `backend`, `dry_run` | `RPC_MAINNET`, `OPENROUTER_API_KEY` |
+| `review-ping.yml` | Notifies via `board-discord-bot` when a review is requested | `discord_bot_ref`, `dry_run` | `DISCORD_BOT_TOKEN` |
+| `quality-scan.yml` | Batch scope-checks every open board issue (skipping ones already commented), posts a scope comment per issue, then runs `board-discord-bot`'s batch quality check | `statuses`, `max_issues`, `board_app_ref`, `discord_bot_ref`, `backend`, `dry_run` | `BOARD_APP_PRIVATE_KEY`, `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY`, `DISCORD_BOT_TOKEN` |
+| `required-ci.yml` / `required-proposals.yml` | Org-ruleset entry points; wrap `foundry-ci.yml` / `proposal-checks.yml` with no per-repo inputs | — | forwarded from the ruleset repo |
 
-| Caller | Reusable workflow | Trigger |
-|---|---|---|
-| `ci.yml` | `foundry-ci.yml` | `pull_request`, push to `main` |
-| `report.yml` | `report-comment.yml` | `workflow_run` on the `ci` workflow |
-| `board.yml` | `pr-board.yml` (called twice, `command: pr-issue-check` / `command: pr-sync`) | PR opened/sync/reopened/edited (check), review requested/removed/submitted/dismissed and PR closed (sync) |
-| `ai.yml` | `ai-comment.yml` | PR opened/synchronize (`kind: review`), issue opened (`kind: scope`) |
+`ai-comment.yml`'s `kind: review` path only runs when the `ai-review` label
+is added to a PR (not on open/synchronize); it removes the label after
+posting, so re-adding it re-triggers the review. The `kind: scope` path
+keeps its 24h recency gate and its own AI comment via `render_ai_comment.py`
+(built from the model's strict-JSON output, never raw model text), plus a
+single-issue `board-discord-bot` quality check right after posting.
 
-`General-Task` (the issues repository) instead takes only `callers/general-task-ai.yml`
-for AI scope notes on newly opened issues; its board sync already lives in
-`board-app/callers/general-task/issue-events.yml`.
+`dry_run` defaults to `true` everywhere; flip to `false` only for an approved
+live window.
 
-Every caller passes `dry_run: true` in these examples; flip to `false` only for an
-approved live window (Principle 4: dry mode is the default everywhere).
+## Reusable action: `coverage-gate`
 
-### Coverage threshold
+Runs `forge coverage`, sums line coverage under `path_prefix` (excluding
+`exclude_suffixes`), and fails if it's below `min_coverage`. Shared by
+`foundry-ci.yml` (all of `src/`) and `proposal-checks.yml` (payload files
+only).
 
-`foundry-ci.yml` takes an optional input `min_coverage` (number, default `0` = off).
-When greater than 0, the `test` job runs `forge coverage --report lcov`, sums line
-coverage (`LH`/`LF`) only for records under `src/` (test/, script/, lib/ excluded),
-prints the resulting percentage, and fails the job if it is below the threshold.
-The value is validated as an integer 0-100; anything else fails the job closed.
-Example, in a delivering repository's `ci.yml`:
+## Minimal caller example
 
 ```yaml
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
 jobs:
   test:
-    uses: "TokenLogic-com-au/github-workflows/.github/workflows/foundry-ci.yml@<github-workflows commit SHA>"
+    permissions:
+      contents: read
+      actions: read
+    uses: "halnation/github-workflows/.github/workflows/foundry-ci.yml@<github-workflows commit SHA>"
     with:
       min_coverage: 80
     secrets:
@@ -46,156 +60,19 @@ jobs:
       QUICKNODE_ENDPOINT_NAME: ${{ secrets.QUICKNODE_ENDPOINT_NAME }}
 ```
 
-An org ruleset that marks `ci` a required workflow calls it centrally with no
-per-repo `with:` block, so `min_coverage` cannot be set that way -- it only takes
-effect when the delivering repository's own `ci.yml` calls `foundry-ci.yml` directly.
-
-## GitHub App installation
-
-The board App must be installed on **the caller repository, `General-Task`, and
-`board-app`** -- `pr-board.yml` mints one token scoped to those three
-(`repositories: <caller>,General-Task,board-app`) because it checks out
-`board-app` with that same token. Installing on only the caller and
-`General-Task` makes the `board-app` checkout fail authentication.
-`github-workflows` is deliberately left off this list: `pr-board.yml` never
-checks it out, and `create-github-app-token` fails outright if the App is not
-installed on every repository named in `repositories:`, so listing a repo the
-token never uses is a pure liability, not a safety margin.
-
-`ai-comment.yml` and `proposal-checks.yml` fetch their scripts through
-`.github/actions/scripts@main`, so they always follow `main`. GitHub fetches
-that composite action itself (the same mechanism `coverage-gate` uses), so no
-checkout step or token is needed even though `github-workflows` is private --
-the org's Actions access setting on this repo must allow org repositories.
-
-## Secrets and variables the callers need
-
-| Name | Kind | Used by |
-|---|---|---|
-| `ALCHEMY_API_KEY`, `QUICKNODE_TOKEN`, `QUICKNODE_ENDPOINT_NAME` | secrets (optional) | `ci.yml`, forwarded to the fork-RPC action |
-| `BOARD_APP_ID` | repository/org variable | `board.yml`, minting the board App token; also `ai.yml`'s `collect` job (`kind: review`), minting a read-only token to read a linked issue that lives in another repo |
-| `BOARD_APP_PRIVATE_KEY` | repository/org secret | `board.yml`, minting the board App token; also `ai.yml`'s `collect` job (`kind: review`), same purpose |
-| `ANTHROPIC_API_KEY` | secret, `backend: anthropic` only, private repos only | `ai.yml`, `generate` only |
-| `OPENROUTER_API_KEY` | secret, `backend: openrouter` only | `ai.yml`, `generate` only |
-| `OPENROUTER_MODEL` | repository/org variable, `backend: openrouter` only | `ai.yml`, `generate` only |
-
-Before use, replace the `ref: 0000...0` placeholders in `pr-board.yml` (board-app),
-`ai-comment.yml` (this repo's own commit, for the `generate` job's pinned checkout),
-and every caller's `@000...0` with the reviewed commit SHA of the relevant repository.
-
-## Token scoping (`permission-*`)
-
-`pr-board.yml` mints two different tokens depending on `command`:
-- `pr-issue-check` (read-only): `permission-pull-requests: read`,
-  `permission-issues: read`, `permission-contents: read`. It only reads
-  `closingIssuesReferences` off the PR.
-- `pr-sync`: **unscoped** (no `permission-*` inputs). board-app's own
-  `issue-events.yml` documents why: the org-issue-fields permission it needs for
-  `setIssueFieldValue` has no matching `permission-*` input on
-  `actions/create-github-app-token@v3.2.0`, and specifying *some* `permission-*`
-  inputs without all of them narrows the token to only the ones named -- so a
-  partial scoping would silently break `pr-sync`. The installation itself is
-  already the ceiling (`app-manifest.json` grants exactly five permissions).
-
-`pr-issue-check` only runs (both in the `check` caller job and in `pr-board.yml`'s
-`run` job) when the PR's base branch is the repository default branch; `pr-sync`
-runs for every PR base regardless.
-
-## Fork behaviour
-
-- `foundry-ci.yml` runs on `pull_request`, which GitHub already denies secrets to for
-  fork PRs; no extra gating needed.
-- `pr-board.yml`'s job explicitly skips (`if:`) when the PR head repository is not
-  this one, for both `pr-issue-check` and `pr-sync`.
-- `ai-comment.yml`'s `collect` job skips the same way for `kind: review`, and the whole
-  workflow only runs on private repositories (`github.event.repository.private`).
-  Fork PRs to `pr-issue-check` are also excluded from the required-check bypass this
-  implies -- a fork PR that never gets checked and a fork PR the App can't reach look
-  identical from the branch-protection side. Accepted for this round.
-- `report-comment.yml` is triggered by `workflow_run`, never `pull_request_target`, and
-  never checks out or executes anything from the PR or the artifact. It binds the
-  report to **trusted event fields only** (`workflow_run.head_sha`,
-  `.head_repository.full_name`, `.event`, `.pull_requests[0].number`, falling back to
-  a `repos/{repo}/commits/{sha}/pulls` lookup for forks where `pull_requests` is
-  empty), looks up that PR's live `.head.sha`/`.head.repo.full_name` and requires both
-  to match. The artifact's own `pr_number.txt`/`head_sha.txt` are read only to
-  cross-check against those trusted values and reject on mismatch -- never to choose
-  the comment's target. HTML comments are stripped from the report body so it cannot
-  forge the `<!-- github-workflows-report -->` marker.
-
-## AI comments
-
-`ai-comment.yml` runs three jobs at different privilege levels: `collect` (reads the
-diff or issue body, no Anthropic secret), `generate` (only the Anthropic secret, no
-checkout of PR code, no GitHub token), `post` (the write token, no Anthropic secret).
-`ai.py` treats its input as untrusted data wrapped inside the prompt, never as
-instructions, and caps the model's output length; an empty model response fails the
-run instead of posting a bare marker. The posted comment is a fixed header
-("AI note (advisory, not a review)") followed by the model's text inside a fenced
-`text` block, with `@` mentions zero-width-split and `<!--`/`-->`/backticks
-neutralised so prompt-injected content can't forge markers, escape the fence, or
-mention people. `post` always emits a newline before the closing fence, even when
-the model's text does not end in one and `head -c "$AI_OUTPUT_CAP"` truncates
-mid-line -- otherwise the closing ` ``` ` glues onto the last line of AI text and
-never renders as a fence.
-
-`collect` (`kind: review`) reads the diff's linked issue via GraphQL
-`closingIssuesReferences`. That issue can live in a different repository (e.g. the
-caller's `General-Task` issue), and `github.token` is scoped to the caller repo
-only, so the query would silently return no body for a cross-repo issue. `collect`
-mints a read-only App token (`repositories: <caller>,General-Task`,
-`permission-issues: read`, `permission-pull-requests: read`,
-`permission-contents: read` -- same shape as `pr-board.yml`'s `pr-issue-check`
-token) and uses it only for that one GraphQL call; the diff fetch and the
-recency-gate lookups keep using `github.token`, since those only ever touch the
-caller repo.
-
-Dedup/recency: `collect`'s gate and `post`'s dedup lookup both paginate
-(`gh api --paginate | jq -rs`) and match only comments containing the hidden
-`<!-- github-workflows-ai -->` marker, keyed off `updated_at` (the comment is
-edited in place, not recreated) rather than `created_at`. A `concurrency` group per
-PR/issue number serialises overlapping runs so two quick pushes can't both post.
-
-### Backends
-
-`ai-comment.yml` takes an input `backend`, `anthropic` (default) or `openrouter`:
-
-- `anthropic`: `generate` calls the Anthropic Messages API with `ANTHROPIC_API_KEY`.
-  Unchanged from before.
-- `openrouter`: `generate` calls OpenRouter's OpenAI-compatible chat-completions
-  endpoint (`https://openrouter.ai/api/v1/chat/completions`) with
-  `OPENROUTER_API_KEY` (secret, sent as `Authorization: Bearer`) and model
-  `OPENROUTER_MODEL` (repository/org variable, e.g. an OpenRouter model id such
-  as `anthropic/claude-sonnet-5`). `OPENROUTER_API_KEY` is visible only to
-  `generate`; `collect` and `post` never see it, and `generate` still runs with
-  `permissions: {}` and no GitHub token.
-
-  OpenRouter is a third-party router: PR diffs and issue bodies sent through it
-  leave TokenLogic's and Anthropic's infrastructure. Set the OpenRouter
-  account's data policy to disallow training on and logging of prompts/completions
-  before enabling this backend on a private repository.
-
-Run `ai.py` locally in dry mode (the default unless `DRY_RUN=0`):
-
-```bash
-DRY_RUN=1 python3 ai.py review path/to/diff.txt out.md
-```
+More examples, including `ai.yml`, `board.yml`, and `report.yml`, live under
+`callers/delivering-repo/`. `callers/general-task-quality-scan.yml` is a
+`workflow_dispatch` caller for `quality-scan.yml` on the General-Task board
+repo. Replace every `@<github-workflows commit SHA>` placeholder with the
+reviewed commit SHA before use.
 
 ## Tests
 
 ```bash
-python3 -B -m unittest test_ai -v
+python3 -m pytest -q
 ```
 
 Workflow YAML is validated with `python3 -c "import yaml; yaml.safe_load(open(f))"`
-over every file, plus a script asserting no `${{ }}` expression appears inside any
-`run:` block. `actionlint` was not run (not installable in this environment -- no
-`go`, and no outbound network access to fetch a release binary).
-
-## Budget
-
-`ai.py` is within its 80-line budget. The combined YAML (`.github/workflows/` +
-`callers/`) is over the 340-line budget after this fix round -- see the fix-round
-report for the exact count and why (the mandated B1/B3/B5/S3/S4/S5 fixes add real,
-non-optional lines: trusted-event PR binding, per-command token scoping, paginated
-dedup, output sanitisation). No security fix was cut to hit the line count.
+over every file. Run `dev/run-proposal-checks-locally.sh` to exercise the
+`proposal-checks.yml` advisory step (spec-check + decimals scale check)
+against a local proposal repo without a GitHub Actions round-trip.

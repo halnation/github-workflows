@@ -32,7 +32,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: discord-bot
           permission-contents: read
-      - name: Check out discord-bot
+      - name: Check out board-discord-bot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/discord-bot

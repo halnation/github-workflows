@@ -3,20 +3,20 @@
 # on the prompt/renderer without a GitHub Actions round-trip.
 #
 # Usage: dev/run-proposal-checks-locally.sh <path-to-proposal-repo> <proposal-folder-under-src>
-# Example: dev/run-proposal-checks-locally.sh ~/proposals-trial 20260910_AaveV3Ethereum_AugSepFundingUpdatePart1
+# Example: dev/run-proposal-checks-locally.sh ~/proposals 20260910_AaveV3Ethereum_AugSepFundingUpdatePart1
 #
-# Secrets: reads RPC_MAINNET and OPENROUTER_API_KEY BY NAME from
-# /home/halaprix/Projects/tokenlogic/.env (never prints them). If RPC_MAINNET
-# generation fails (e.g. a live-mainnet-state revert unrelated to the
-# payload), falls back to any already-committed diffs/*.md for that
-# proposal, and failing that, runs the comparison with an empty payload
-# side (the renderer says so plainly rather than fabricating data).
+# Secrets: reads RPC_MAINNET and OPENROUTER_API_KEY BY NAME from the file at
+# $ENV_FILE (default: ~/.env; never prints them). If RPC_MAINNET generation
+# fails (e.g. a live-mainnet-state revert unrelated to the payload), falls
+# back to any already-committed diffs/*.md for that proposal, and failing
+# that, runs the comparison with an empty payload side (the renderer says so
+# plainly rather than fabricating data).
 set -euo pipefail
 
 WORKFLOWS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="${1:?usage: $0 <proposal-repo-path> <proposal-folder>}"
 PROPOSAL_FOLDER="${2:?usage: $0 <proposal-repo-path> <proposal-folder>}"
-ENV_FILE="/home/halaprix/Projects/tokenlogic/.env"
+ENV_FILE="${ENV_FILE:-$HOME/.env}"
 OUT_DIR="${WORKFLOWS_DIR}/dev/out"
 mkdir -p "$OUT_DIR"
 

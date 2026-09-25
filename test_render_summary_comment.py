@@ -5,7 +5,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_summary_comment as rsc
 
-REPO = "halnation/proposals-trial"
+REPO = "halnation/example-proposals"
 SHA = "abc123"
 
 

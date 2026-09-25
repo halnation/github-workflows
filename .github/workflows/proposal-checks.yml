@@ -49,8 +49,8 @@ jobs:
           # Upstream aave-proposals-v3 pins aave-address-book only as a nested
           # submodule of aave-helpers (lib/aave-helpers/lib/aave-address-book) -- a
           # second, independently-pinned top-level copy caused a real forge remapping
-          # clash against aave-helpers' own ProtocolV3TestBase in the trial build, so
-          # this replica follows upstream's single-copy layout.
+          # clash against aave-helpers' own ProtocolV3TestBase, so this replica
+          # follows upstream's single-copy layout.
           #
           # This step always exits 0 (see "enforce" below): a step that exits
           # non-zero here was observed to lose its GITHUB_OUTPUT writes on this
@@ -196,7 +196,7 @@ jobs:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
       - name: Coverage threshold (payload contracts only)
         id: gate
-        uses: halnation/github-workflows/.github/actions/coverage-gate@458eb44149158d1f758896d3449f2bcefc290330
+        uses: halnation/github-workflows/.github/actions/coverage-gate@main
         with:
           min_coverage: ${{ inputs.min_coverage }}
           path_prefix: "src/"

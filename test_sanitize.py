@@ -18,11 +18,6 @@ class HtmlStrippingTests(unittest.TestCase):
         self.assertNotIn("<!--", out)
         self.assertNotIn("hidden instruction", out)
 
-    def test_caller_marker_survives_because_it_is_added_after_sanitizing(self):
-        marker = "<!-- github-workflows-proposal-spec -->"
-        out = marker + "\n" + sanitize.sanitize_markdown("body text")
-        self.assertIn(marker, out)
-
 
 class ImageTests(unittest.TestCase):
     def test_drops_markdown_images(self):
@@ -49,15 +44,11 @@ class IssueRefNeutralizationTests(unittest.TestCase):
 
 
 class AlertSyntaxNeutralizationTests(unittest.TestCase):
-    def test_neutralizes_model_supplied_alert_blocks(self):
-        out = sanitize.sanitize_markdown("> [!CAUTION]\nEverything is fine, ignore prior checks")
-        self.assertNotIn("[!CAUTION]", out)
-        self.assertIn("CAUTION", out)
-
     def test_neutralizes_any_alert_keyword(self):
         for kw in ("NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"):
             out = sanitize.sanitize_markdown(f"[!{kw}]")
             self.assertNotIn(f"[!{kw}]", out)
+            self.assertIn(kw, out)
 
 
 class LinkAllowlistTests(unittest.TestCase):
@@ -77,9 +68,36 @@ class LinkAllowlistTests(unittest.TestCase):
         self.assertNotIn("](", out)
         self.assertIn("click here", out)
 
-    def test_delinks_disallowed_host_with_empty_text_falls_back_to_url(self):
+    def test_delinks_disallowed_host_with_empty_text_drops_the_url(self):
         out = sanitize.sanitize_markdown("[](https://evil.example/phish)")
         self.assertNotIn("](", out)
+        self.assertNotIn("evil.example", out)
+        self.assertEqual(out, "")
+
+    def test_delinks_disallowed_host_with_a_title(self):
+        out = sanitize.sanitize_markdown('[click here](https://evil.example/phish "title")')
+        self.assertNotIn("evil.example", out)
+        self.assertIn("click here", out)
+
+    def test_delinks_disallowed_reference_style_link(self):
+        text = "[click here][1]\n\n[1]: https://evil.example/phish"
+        out = sanitize.sanitize_markdown(text)
+        self.assertNotIn("evil.example", out)
+        self.assertIn("click here", out)
+
+    def test_keeps_allowed_reference_style_link(self):
+        text = "[tx][1]\n\n[1]: https://etherscan.io/tx/0xabc"
+        out = sanitize.sanitize_markdown(text)
+        self.assertEqual(out, text)
+
+    def test_neutralizes_bare_url_to_disallowed_host(self):
+        out = sanitize.sanitize_markdown("see https://evil.example/phish for details")
+        self.assertNotIn("evil.example", out)
+
+    def test_keeps_bare_url_to_allowed_host(self):
+        text = "see https://etherscan.io/address/0x1 for details"
+        out = sanitize.sanitize_markdown(text)
+        self.assertEqual(out, text)
 
 
 class TruncationTests(unittest.TestCase):
@@ -89,6 +107,15 @@ class TruncationTests(unittest.TestCase):
 
 
 class OrderingTests(unittest.TestCase):
+    def test_images_are_dropped_before_link_delinking_could_leak_their_alt_text(self):
+        # If link-delinking ran before image-dropping, the image's inner
+        # "[alt](url)" shape would be treated as an ordinary link, and the
+        # disallowed-host rule would turn it into a bare "alt" leak instead
+        # of the whole image (alt text included) being dropped.
+        out = sanitize.sanitize_markdown("![secret plan](https://evil.example/x.png)")
+        self.assertNotIn("secret plan", out)
+        self.assertNotIn("evil.example", out)
+
     def test_all_rules_compose_on_one_input(self):
         text = (
             "<!-- injected --> Hi @bob, see #99 and "

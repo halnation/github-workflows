@@ -70,7 +70,7 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(out["warnings"], [])
         self.assertEqual(out["unexplained"], [])
 
-    def test_recipient_mismatch_on_amount_matched_is_flagged(self):
+    def test_no_matching_recipient_address_goes_to_unexplained_despite_same_amount(self):
         # same amount coincidentally, but payload recipient has an address that
         # doesn't match any forum address -> goes to unexplained, not warnings,
         # since matching is address-driven.
@@ -79,6 +79,18 @@ class CompareTests(unittest.TestCase):
         payload = [{"amount": "50,000", "recipient": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", "decimals": 18}]
         out = sc.compare(forum, payload)
         self.assertEqual(len(out["unexplained"]), 1)
+
+    def test_address_matching_is_case_insensitive(self):
+        # forum text carries a checksummed address, the payload's decoded
+        # address is lowercase -- they must still match as the same recipient.
+        forum = [{"action": "Reimburse", "asset": "aEthLidoGHO", "amount": "50,000",
+                  "recipient": "TokenLogic 0xAA088dfF3dcF619664094945028d44E779F19894",
+                  "network": "Ethereum"}]
+        payload = [{"amount": "50,000",
+                    "recipient": "0xaa088dff3dcf619664094945028d44e779f19894", "decimals": 18}]
+        out = sc.compare(forum, payload)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["unexplained"], [])
 
     def test_no_recipient_address_on_payload_side_is_unexplained(self):
         forum = [{"action": "Reimburse", "asset": "GHO", "amount": "50,000", "recipient": None, "network": "Ethereum"}]

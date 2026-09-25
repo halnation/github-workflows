@@ -72,10 +72,6 @@ def compare(forum_items, payload_items):
         if f_num is not None and p_num is not None and f_num != p_num:
             mismatch = True
             detail.append(f"amount: forum `{f.get('amount')}`, payload `{p.get('amount')}`")
-        f_addr = _extract_address(f.get("recipient"))
-        if f_addr and p_addr and f_addr != p_addr:
-            mismatch = True
-            detail.append(f"recipient: forum `{f.get('recipient')}`, payload `{p.get('recipient')}`")
         if mismatch:
             warnings.append(
                 {

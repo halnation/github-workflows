@@ -48,6 +48,21 @@ class ParsePayloadActionsTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["recipient"], "0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b")
 
+    def test_dedup_uses_the_raw_amount_not_the_rounded_display_amount(self):
+        # Two genuinely different raw amounts (5e11 and 7e11) that both
+        # round to the same displayed "0.0000" at 18 decimals, to the same
+        # recipient, must NOT collapse into one finding.
+        text = (
+            "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 0.0000 [500000000000, 18 decimals])\n"
+            "Transfer(from: 0x464C71f6c2F760DdA6093dCB91C24c39e5d6e18c, "
+            "to: 0xA1c93D2687f7014Aaf588c764E3Ce80aF016229b, "
+            "value: 0.0000 [700000000000, 18 decimals])\n"
+        )
+        out = dp.parse_payload_actions(text)
+        self.assertEqual(len(out), 2)
+
     def test_duplicate_transfer_and_balance_transfer_lines_for_the_same_move_collapse_to_one(self):
         # An aToken transfer emits both a standard Transfer event and Aave's
         # own BalanceTransfer event for the SAME underlying move -- both

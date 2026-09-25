@@ -45,7 +45,18 @@ _ALERT_SYNTAX_RE = re.compile(r"\[!(\w+)\]")
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MENTION_RE = re.compile(r"@(?=\w)")
 _ISSUE_REF_RE = re.compile(r"#(?=\d)")
-_LINK_RE = re.compile(r"\[([^\]]*)\]\((https?://[^)\s]+)\)")
+_REF_DEF_RE = re.compile(r"^\[([^\]]+)\]:\s*(https?://\S+).*$", re.MULTILINE)
+# Matches, in one left-to-right pass, every shape a URL can appear in: an
+# inline link (optionally titled), a reference-style definition line, a
+# reference-style usage, or a bare URL. One pass means a URL already
+# consumed as part of a link never gets re-matched as a "bare" one.
+_LINK_RE = re.compile(
+    r"(?P<inline>\[(?P<itext>[^\]]*)\]\((?P<iurl>https?://[^)\s]+)(?:\s+\"[^\"]*\")?\))"
+    r"|(?P<refdef>^\[(?P<drefname>[^\]]+)\]:\s*(?P<durl>https?://\S+).*$)"
+    r"|(?P<refuse>\[(?P<utext>[^\]]*)\]\[(?P<urefname>[^\]]+)\])"
+    r"|(?P<bare>https?://\S+)",
+    re.MULTILINE,
+)
 
 ZERO_WIDTH_SPACE = "​"
 
@@ -74,16 +85,32 @@ def _neutralize_alert_syntax(text: str) -> str:
     return _ALERT_SYNTAX_RE.sub(lambda m: "[" + ZERO_WIDTH_SPACE + "!" + m.group(1) + "]", text)
 
 
+def _is_allowed_host(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host in ALLOWED_LINK_HOSTS or any(
+        host.endswith("." + allowed) for allowed in ALLOWED_LINK_HOSTS
+    )
+
+
 def _delink_disallowed_hosts(text: str) -> str:
+    refs = {name.strip().lower(): url for name, url in _REF_DEF_RE.findall(text)}
+
     def repl(m):
-        link_text, url = m.group(1), m.group(2)
-        host = urlparse(url).hostname or ""
-        host = host.lower()
-        if host in ALLOWED_LINK_HOSTS or any(
-            host.endswith("." + allowed) for allowed in ALLOWED_LINK_HOSTS
-        ):
-            return m.group(0)
-        return link_text or url
+        if m.group("inline"):
+            link_text, url = m.group("itext"), m.group("iurl")
+            if _is_allowed_host(url):
+                return m.group(0)
+            return link_text  # empty text drops the URL too, never falls back to it
+        if m.group("refdef"):
+            return m.group(0) if _is_allowed_host(m.group("durl")) else ""
+        if m.group("refuse"):
+            link_text = m.group("utext")
+            url = refs.get(m.group("urefname").strip().lower())
+            if url is not None and _is_allowed_host(url):
+                return m.group(0)
+            return link_text
+        url = m.group("bare")
+        return url if _is_allowed_host(url) else ""
 
     return _LINK_RE.sub(repl, text)
 

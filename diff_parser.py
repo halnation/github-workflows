@@ -36,10 +36,13 @@ def parse_payload_actions(diff_report_text: str):
     """Returns a list of {"action", "asset", "amount", "decimals",
     "recipient", "network", "raw_line"} extracted from decoded value lines.
 
-    Deduped on (amount, decimals, recipient): an aToken transfer emits both
-    a standard Transfer event and Aave's own BalanceTransfer event for the
-    same underlying move, and both decode to an identical entry here -- one
-    real action must not become two duplicate findings downstream.
+    Deduped on (raw, decimals, recipient) -- the exact underlying integer,
+    not the rounded human-readable display amount: an aToken transfer emits
+    both a standard Transfer event and Aave's own BalanceTransfer event for
+    the same underlying move, and both decode to an identical entry here --
+    one real action must not become two duplicate findings downstream. Using
+    the display amount instead would also collapse two genuinely different
+    raw amounts that happen to round to the same displayed value.
     """
     if not diff_report_text or not diff_report_text.strip():
         return []
@@ -50,7 +53,7 @@ def parse_payload_actions(diff_report_text: str):
         if not m:
             continue
         recipient = _extract_recipient(line)
-        key = (m.group("human"), m.group("decimals"), recipient)
+        key = (m.group("raw"), m.group("decimals"), recipient)
         if key in seen:
             continue
         seen.add(key)

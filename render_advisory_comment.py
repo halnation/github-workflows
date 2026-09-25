@@ -41,7 +41,7 @@ def render_scale_alert(scale_check_output: str) -> str:
     ]
     if not flags:
         return "> [!NOTE]\n> No decimals-scale issues found."
-    lines = [f"> 🔴 {line}" for line in flags]
+    lines = [f"> 🔴 {sanitize_markdown(line, 300)}" for line in flags]
     return "> [!CAUTION]\n" + "\n".join(lines)
 
 
@@ -53,11 +53,11 @@ def render_comparison_alerts(comparison: dict) -> str:
             line = f"> 🔴 In payload but not in the forum post: amount `{p.get('amount')}`"
             if p.get("recipient"):
                 line += f", recipient `{p.get('recipient')}`"
-            lines.append(line)
+            lines.append(sanitize_markdown(line, 300))
         blocks.append("> [!CAUTION]\n" + "\n".join(lines))
     if comparison["warnings"]:
         lines = [
-            f"> 🟠 Mismatch: {w['label']}: {w['detail']}"
+            sanitize_markdown(f"> 🟠 Mismatch: {w['label']}: {w['detail']}", 300)
             for w in comparison["warnings"]
         ]
         blocks.append("> [!WARNING]\n" + "\n".join(lines))

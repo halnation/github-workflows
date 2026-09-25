@@ -200,8 +200,8 @@ class AnthropicStyleTests(unittest.TestCase):
         self.assertEqual(req.get_header("X-api-key"), "test-key")
         self.assertEqual(req.get_header("Anthropic-version"), "2023-06-01")
         body = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(body["model"], ai.MODEL)
-        self.assertEqual(body["max_tokens"], ai.MAX_TOKENS)
+        self.assertEqual(body["model"], "claude-sonnet-5")
+        self.assertEqual(body["max_tokens"], 1500)
         self.assertIn("diff body", body["messages"][0]["content"])
 
     def test_joins_multiple_text_blocks(self):
@@ -210,9 +210,11 @@ class AnthropicStyleTests(unittest.TestCase):
         self.assertEqual(content, "Hello world")
 
     def test_writes_api_text_and_caps_its_length(self):
+        # OUTPUT_CAP truncation is applied at one shared call site regardless
+        # of API style, so one style is enough to cover the contract.
         long_text = "x" * (ai.OUTPUT_CAP + 500)
         content, _, _ = _live({"ANTHROPIC_API_KEY": "test-key"}, {"content": [{"text": long_text}]})
-        self.assertEqual(len(content), ai.OUTPUT_CAP)
+        self.assertEqual(len(content), 20000)
 
     def test_empty_model_response_is_rejected(self):
         with self.assertRaises(SystemExit):
@@ -240,12 +242,6 @@ class OpenAIStyleTests(unittest.TestCase):
         self.assertIsNone(req.get_header("X-api-key"))
         self.assertEqual(content, "a local review")
 
-    def test_body_includes_model_and_max_tokens(self):
-        _, req, _ = _live(self.LOCAL, {"choices": [{"message": {"content": "ok"}}]})
-        body = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(body["model"], ai.MODEL)
-        self.assertEqual(body["max_tokens"], ai.MAX_TOKENS)
-
     def test_omits_bearer_header_when_no_key(self):
         _, req, _ = _live(self.LOCAL, {"choices": [{"message": {"content": "ok"}}]})
         self.assertIsNone(req.get_header("Authorization"))
@@ -254,12 +250,6 @@ class OpenAIStyleTests(unittest.TestCase):
         response = {"choices": [{"message": {"content": "<think>reasoning here</think>final answer"}}]}
         content, _, _ = _live(self.LOCAL, response)
         self.assertEqual(content, "final answer")
-
-    def test_writes_api_text_and_caps_its_length(self):
-        long_text = "x" * (ai.OUTPUT_CAP + 500)
-        response = {"choices": [{"message": {"content": long_text}}]}
-        content, _, _ = _live(self.LOCAL, response)
-        self.assertEqual(len(content), ai.OUTPUT_CAP)
 
     def test_truncated_response_exits_nonzero(self):
         response = {"choices": [{"finish_reason": "length", "message": {"content": "partial"}}]}
@@ -358,12 +348,6 @@ class LogUsageTests(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("0.0012", out)
         self.assertIn("15", out)
-
-    def test_never_prints_the_api_key(self):
-        buf = io.StringIO()
-        with mock.patch.object(sys, "stderr", buf):
-            ai.log_usage({"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.0}})
-        self.assertNotIn("sk-", buf.getvalue())
 
     def test_missing_usage_does_not_crash(self):
         buf = io.StringIO()

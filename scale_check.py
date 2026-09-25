@@ -23,7 +23,7 @@ DECIMALS = {
 LOW_BOUND = 1e-6
 HIGH_BOUND = 1e9
 RAW_LINE = re.compile(
-    r"(?P<symbol>[A-Za-z0-9._]+)\D{0,40}?(?P<raw>\d{6,})(?!\s*decimals)", re.IGNORECASE
+    r"(?P<symbol>[A-Za-z][A-Za-z0-9._]*)[:\s]+(?P<raw>\d{6,})(?!\s*decimals)", re.IGNORECASE
 )
 DECODED_LINE = re.compile(r"\[\s*\d[\d,]*\s*,\s*\d+\s*decimals\s*\]")
 
@@ -33,20 +33,19 @@ def check(report_text):
     for line in report_text.splitlines():
         if DECODED_LINE.search(line):
             continue  # already decoded with its own decimals; not our gap case
-        m = RAW_LINE.search(line)
-        if not m:
-            continue
-        symbol = m.group("symbol").upper()
-        decimals = DECIMALS.get(symbol)
-        if decimals is None:
-            continue
-        raw = int(m.group("raw"))
-        human = raw / (10 ** decimals)
-        if human < LOW_BOUND or human > HIGH_BOUND:
-            flags.append(
-                f"possible decimals error: {symbol} raw={raw} -> {human:g} human units "
-                f"(outside [{LOW_BOUND:g}, {HIGH_BOUND:g}]) in line: {line.strip()}"
-            )
+        for m in RAW_LINE.finditer(line):
+            symbol = m.group("symbol").upper()
+            decimals = DECIMALS.get(symbol)
+            if decimals is None:
+                continue
+            raw = int(m.group("raw"))
+            human = raw / (10 ** decimals)
+            if human < LOW_BOUND or human > HIGH_BOUND:
+                flags.append(
+                    f"possible decimals error: {symbol} raw={raw} -> {human:g} human units "
+                    f"(outside [{LOW_BOUND:g}, {HIGH_BOUND:g}]) in line: {line.strip()}"
+                )
+            break
     return flags
 
 

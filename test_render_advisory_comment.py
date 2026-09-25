@@ -61,12 +61,31 @@ class BuildTests(unittest.TestCase):
     def test_scale_flags_render_caution_independent_of_forum(self):
         out = rac.build(CLEAN_FORUM, CLEAN_DIFF, "possible decimals error: USDC raw=1 -> 1e-6 human units")
         self.assertIn("🔴", out)
-        # two CAUTION-capable sections possible; scale section must be present
+        self.assertIn("[!CAUTION]", out)
         self.assertIn("possible decimals error", out)
 
     def test_model_cannot_forge_alert_syntax_in_the_error_path(self):
         out = rac.build("> [!CAUTION]\nnot json", CLEAN_DIFF, "no scale-bound flags")
         self.assertNotIn("[!CAUTION]\nnot json", out)
+        self.assertEqual(out.count("[!CAUTION]"), 0)
+
+    def test_poisoned_forum_field_is_neutralized_in_the_advisory_comment(self):
+        # A model-supplied forum field flowing into a mismatch warning must
+        # not carry raw @mentions, HTML, forged alert syntax, or disallowed
+        # links into the posted comment.
+        poison = "@everyone <img src=x> [!CAUTION] [pwn](https://evil.example)"
+        forum = json.dumps({"forum": [
+            {"action": poison, "asset": "GHO", "amount": "999999",
+             "recipient": "0xAA088dfF3dcF619664094945028d44E779F19894", "network": "Ethereum"}
+        ]})
+        out = rac.build(forum, CLEAN_DIFF, "no scale-bound flags")
+        self.assertNotIn("@everyone", out)
+        self.assertNotIn("<img", out)
+        self.assertNotIn("evil.example", out)
+        # the model's own text must not smuggle a forged alert block; only
+        # the caller's own [!WARNING] wrapper is allowed to appear
+        self.assertEqual(out.count("[!CAUTION]"), 0)
+        self.assertIn("[!WARNING]", out)
 
 
 if __name__ == "__main__":

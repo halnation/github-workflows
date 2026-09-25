@@ -23,6 +23,12 @@ jobs:
     env:
       DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
     steps:
+      - name: Validate required org variables
+        run: |
+          if [ -z "${{ vars.BOT_REPO }}" ]; then
+            echo "Error: review-ping requires vars.BOT_REPO to be set"
+            exit 1
+          fi
       - name: Mint read-only app token
         id: mint
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -30,14 +36,14 @@ jobs:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: discord-bot
+          repositories: ${{ vars.BOT_REPO }}
           permission-contents: read
-      - name: Check out board-discord-bot
+      - name: Check out the bot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/discord-bot
+          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
           ref: ${{ inputs.discord_bot_ref }}
-          path: discord-bot
+          path: bot-tool
           token: ${{ steps.mint.outputs.token }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -51,4 +57,4 @@ jobs:
           PR_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: python3 discord-bot/review_ping.py
+        run: python3 bot-tool/review_ping.py

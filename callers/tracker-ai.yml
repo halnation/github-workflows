@@ -13,8 +13,8 @@ jobs:
       kind: scope
       backend: openrouter
       dry_run: true
-      board_app_ref: "<board-app commit SHA>" # REQUIRED: pin to the reviewed board-app commit
-      discord_bot_ref: "<board-discord-bot commit SHA>" # REQUIRED: pin to the reviewed board-discord-bot commit
+      board_app_ref: "<board app commit SHA>" # REQUIRED: pin to the reviewed board app commit
+      discord_bot_ref: "<bot commit SHA>" # REQUIRED: pin to the reviewed bot commit
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       BOARD_APP_PRIVATE_KEY: ${{ secrets.BOARD_APP_PRIVATE_KEY }}

@@ -1,8 +1,8 @@
 name: quality-scan
-# Batch scope-check of open board issues: lists issues via board-app,
+# Batch scope-check of open board issues: lists issues via the board app,
 # skips any that already carry the ai-comment marker, runs the same
 # scope.md AI check + render as ai-comment.yml's scope path per issue, then
-# hands the whole batch to board-discord-bot's issue_quality.py.
+# hands the whole batch to the bot's issue_quality.py.
 on:
   workflow_call:
     inputs:
@@ -26,7 +26,7 @@ on:
         default: openrouter
       config:
         type: string
-        default: board-app/config.json
+        default: board-tool/config.json
     secrets:
       BOARD_APP_PRIVATE_KEY:
         required: true
@@ -43,7 +43,6 @@ defaults:
 env:
   DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
   MARKER: "<!-- github-workflows-ai -->"
-  MODEL_LABEL: ${{ inputs.backend == 'openrouter' && vars.OPENROUTER_MODEL || 'claude-sonnet-5' }}
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -51,6 +50,16 @@ jobs:
       contents: read
       issues: write
     steps:
+      - name: Validate required org variables
+        run: |
+          missing=()
+          [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
+          [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
+          [ -z "${{ vars.BOT_REPO }}" ] && missing+=("vars.BOT_REPO")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Error: quality-scan requires the following org variables: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+            exit 1
+          fi
       - name: Mint app token
         id: mint
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -58,24 +67,24 @@ jobs:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }},General-Task,board-app,discord-bot
+          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }},${{ vars.BOT_REPO }}
           permission-issues: write
           permission-contents: read
           permission-organization-projects: read
-      - name: Check out board-app
+      - name: Check out the board app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/board-app
+          repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
           ref: ${{ inputs.board_app_ref }}
-          path: board-app
+          path: board-tool
           token: ${{ steps.mint.outputs.token }}
           persist-credentials: false
-      - name: Check out board-discord-bot
+      - name: Check out the bot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/discord-bot
+          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
           ref: ${{ inputs.discord_bot_ref }}
-          path: discord-bot
+          path: bot-tool
           token: ${{ steps.mint.outputs.token }}
           persist-credentials: false
       - uses: halnation/github-workflows/.github/actions/scripts@main
@@ -88,7 +97,7 @@ jobs:
           BOARD_CONFIG: ${{ inputs.config }}
           STATUSES: ${{ inputs.statuses }}
         run: |
-          python3 board-app/board.py open-issues --config "$BOARD_CONFIG" --status "$STATUSES" > open-issues.json
+          python3 board-tool/board.py open-issues --config "$BOARD_CONFIG" --status "$STATUSES" > open-issues.json
           jq -c '.[]' open-issues.json > issues.ndjson
       - name: Scope-check each issue and collect results
         env:
@@ -119,6 +128,7 @@ jobs:
             url=$(printf '%s' "$issue" | jq -r .url)
             body=$(printf '%s' "$issue" | jq -r .body)
             status=$(printf '%s' "$issue" | jq -r .status)
+            author=$(printf '%s' "$issue" | jq -r .author)
             assignees_line=$(printf '%s' "$issue" | jq -r '(.assignees // []) | join(", ")')
             assignees_json=$(printf '%s' "$issue" | jq -c '.assignees // []')
             existing=$(gh api --paginate "repos/$REPO/issues/$number/comments" | jq -rs --arg m "$MARKER" \
@@ -135,18 +145,18 @@ jobs:
               echo "<board-status>${status}</board-status>"
             } > "input-$number.txt"
             python3 "$GW/ai.py" scope "input-$number.txt" "out-$number.md"
-            python3 "$GW/render_ai_comment.py" scope "out-$number.md" "$number" "$MODEL_LABEL" "body-$number.md"
+            python3 "$GW/render_ai_comment.py" scope "out-$number.md" "$number" "body-$number.md"
             if [ "$DRY_RUN" != "0" ]; then
               echo "would post scope comment on #$number" >&2
             else
               { printf '%s\n' "$MARKER"; cat "body-$number.md"; } > "comment-$number.md"
               gh api "repos/$REPO/issues/$number/comments" -X POST -F body=@"comment-$number.md" >&2
             fi
-            python3 "$GW/render_ai_comment.py" results "out-$number.md" "$number" "$title" "$url" "$assignees_json" "item-$number.json"
+            python3 "$GW/render_ai_comment.py" results "out-$number.md" "$number" "$title" "$url" "$assignees_json" "item-$number.json" "$author"
             items=$(jq -cs '.[0] + [.[1][0]]' <(printf '%s' "$items") "item-$number.json")
           done < issues.ndjson
           printf '%s' "$items" > results.json
       - name: Run batch issue quality check
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: python3 discord-bot/issue_quality.py batch results.json
+        run: python3 bot-tool/issue_quality.py batch results.json

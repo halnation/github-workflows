@@ -6,7 +6,8 @@
 # Example: dev/run-proposal-checks-locally.sh ~/proposals 20260910_AaveV3Ethereum_AugSepFundingUpdatePart1
 #
 # Secrets: reads RPC_MAINNET and OPENROUTER_API_KEY BY NAME from the file at
-# $ENV_FILE (default: ~/.env; never prints them). If RPC_MAINNET generation
+# $ENV_FILE (default: ~/.env; never prints them). OPENROUTER_MODEL must also
+# be set in the environment (no default model). If RPC_MAINNET generation
 # fails (e.g. a live-mainnet-state revert unrelated to the payload), falls
 # back to any already-committed diffs/*.md for that proposal, and failing
 # that, runs the comparison with an empty payload side (the renderer says so
@@ -23,7 +24,7 @@ mkdir -p "$OUT_DIR"
 if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
-  source <(grep -E '^(RPC_MAINNET|OPENROUTER_API_KEY)=' "$ENV_FILE")
+  source <(grep -E '^(RPC_MAINNET|OPENROUTER_API_KEY|OPENROUTER_MODEL)=' "$ENV_FILE")
   set +a
 fi
 
@@ -67,7 +68,7 @@ DRY_RUN=0 \
 AI_API_STYLE=openai \
 AI_API_URL=https://openrouter.ai/api/v1/chat/completions \
 AI_API_KEY="${OPENROUTER_API_KEY:-}" \
-AI_MODEL="${OPENROUTER_MODEL:-z-ai/glm-5.3}" \
+AI_MODEL="${OPENROUTER_MODEL:?set OPENROUTER_MODEL in $ENV_FILE or the environment}" \
 AI_MAX_TOKENS=16000 \
 python3 ai.py spec-check "$OUT_DIR/input.txt" "$OUT_DIR/ai-out.md"
 

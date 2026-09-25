@@ -5,7 +5,7 @@ model's own text never reaches GitHub except through sanitize_markdown()
 inside a bounded field. Invalid/missing JSON renders one neutral note, never
 the raw model text.
 
-Also builds the one-item results.json handed to board-discord-bot's
+Also builds the one-item results.json handed to the bot's
 issue_quality.py (the "results" mode below) from the same parsed scope
 output, so both consumers share one JSON-parsing path.
 """
@@ -40,9 +40,8 @@ def _clean(value, cap=FIELD_CAP) -> str:
     return sanitize_markdown(str(value), cap)
 
 
-def _footer(model: str) -> str:
-    model = _clean(model, 80)
-    return f"_advisory, not a review · {model}_" if model else "_advisory, not a review_"
+def _footer() -> str:
+    return "_advisory, not a review_"
 
 
 def build_header(kind: str, number) -> str:
@@ -51,14 +50,14 @@ def build_header(kind: str, number) -> str:
     return f"**AI scope check — issue #{number}**"
 
 
-def _neutral(header: str, model: str) -> str:
+def _neutral(header: str) -> str:
     lines = [
         header,
         "",
         "_The AI response could not be parsed as structured output; no comment "
         "content was generated for this run._",
         "",
-        _footer(model),
+        _footer(),
     ]
     return "\n".join(lines) + "\n"
 
@@ -77,11 +76,11 @@ def _fmt_finding(f: dict) -> str:
     return text
 
 
-def render_review(ai_out_text: str, number, model: str = "") -> str:
+def render_review(ai_out_text: str, number) -> str:
     header = build_header("review", number)
     data = parse_json(ai_out_text)
     if not isinstance(data, dict) or "deliverables" not in data or "findings" not in data:
-        return _neutral(header, model)
+        return _neutral(header)
 
     lines = [header, ""]
 
@@ -132,15 +131,15 @@ def render_review(ai_out_text: str, number, model: str = "") -> str:
         lines.append("_No findings._")
         lines.append("")
 
-    lines.append(_footer(model))
+    lines.append(_footer())
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def render_scope(ai_out_text: str, number, model: str = "") -> str:
+def render_scope(ai_out_text: str, number) -> str:
     header = build_header("scope", number)
     data = parse_json(ai_out_text)
     if not isinstance(data, dict) or "questions" not in data:
-        return _neutral(header, model)
+        return _neutral(header)
 
     lines = [header, ""]
     questions = [q for q in (data.get("questions") or []) if isinstance(q, dict)]
@@ -162,11 +161,11 @@ def render_scope(ai_out_text: str, number, model: str = "") -> str:
             lines.append(f"> {fl}")
         lines.append("")
 
-    lines.append(_footer(model))
+    lines.append(_footer())
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def build_results(ai_out_text: str, number, title: str, url: str, assignees) -> list:
+def build_results(ai_out_text: str, number, title: str, url: str, assignees, author: str = "") -> list:
     data = parse_json(ai_out_text)
     questions = []
     flags = []
@@ -185,6 +184,7 @@ def build_results(ai_out_text: str, number, title: str, url: str, assignees) -> 
             "assignees": list(assignees or []),
             "questions": questions,
             "flags": flags,
+            "author": author,
         }
     ]
 
@@ -192,19 +192,20 @@ def build_results(ai_out_text: str, number, title: str, url: str, assignees) -> 
 def main():
     mode = sys.argv[1]
     if mode in ("review", "scope"):
-        ai_out_path, number, model, out_path = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+        ai_out_path, number, out_path = sys.argv[2], sys.argv[3], sys.argv[4]
         with open(ai_out_path, encoding="utf-8") as f:
             ai_out_text = f.read()
         render = render_review if mode == "review" else render_scope
-        body = render(ai_out_text, number, model)
+        body = render(ai_out_text, number)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(body)
     elif mode == "results":
         ai_out_path, number, title, url, assignees_json, out_path = sys.argv[2:8]
+        author = sys.argv[8] if len(sys.argv) > 8 else ""
         with open(ai_out_path, encoding="utf-8") as f:
             ai_out_text = f.read()
         assignees = json.loads(assignees_json) if assignees_json.strip() else []
-        results = build_results(ai_out_text, number, title, url, assignees)
+        results = build_results(ai_out_text, number, title, url, assignees, author)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(results, f)
     else:

@@ -13,7 +13,7 @@ import urllib.request
 STYLE = os.environ.get("AI_API_STYLE") or "anthropic"
 if STYLE not in ("anthropic", "openai"):
     sys.exit(f"unknown AI_API_STYLE: {STYLE!r} (must be 'anthropic' or 'openai')")
-MODEL = os.environ.get("AI_MODEL") or "claude-sonnet-5"
+MODEL = os.environ.get("AI_MODEL") or ""
 MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS") or "1500")
 MAX_INPUT_CHARS = int(os.environ.get("AI_MAX_INPUT_CHARS") or "120000")
 OUTPUT_CAP = int(os.environ.get("AI_OUTPUT_CAP") or "20000")
@@ -129,6 +129,8 @@ def main():
         return
     if API_URL is None:
         sys.exit("AI_API_URL is required when AI_API_STYLE=openai")
+    if not MODEL:
+        sys.exit("AI_MODEL is required (no default model)")
     prompt = build_prompt(kind, input_text)
     api_key = os.environ["ANTHROPIC_API_KEY"] if STYLE == "anthropic" else os.environ.get("AI_API_KEY", "")
     text = call_api(prompt, api_key).strip()

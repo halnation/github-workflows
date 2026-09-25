@@ -90,10 +90,9 @@ class ReviewRenderTests(unittest.TestCase):
         out2 = rac.render_review(empty, 42)
         self.assertIn("_No findings._", out2)
 
-    def test_footer_names_model(self):
-        out = rac.render_review(CLEAN_REVIEW, 42, model="claude-sonnet-5")
-        self.assertIn("advisory, not a review", out)
-        self.assertIn("claude-sonnet-5", out)
+    def test_footer_has_no_model_name(self):
+        out = rac.render_review(CLEAN_REVIEW, 42)
+        self.assertIn("_advisory, not a review_", out)
 
 
 class ScopeRenderTests(unittest.TestCase):
@@ -154,7 +153,7 @@ class HostileFieldBoundaryTests(unittest.TestCase):
                 "more_count": 0,
             }
         )
-        out = rac.render_review(data, 42, model=self.HOSTILE)
+        out = rac.render_review(data, 42)
         self.assertNotIn("@everyone", out)
         self.assertNotIn("<img", out)
         self.assertNotIn("evil.example", out)
@@ -170,7 +169,7 @@ class HostileFieldBoundaryTests(unittest.TestCase):
                 "flags": [self.HOSTILE],
             }
         )
-        out = rac.render_scope(data, 42, model=self.HOSTILE)
+        out = rac.render_scope(data, 42)
         self.assertNotIn("@everyone", out)
         self.assertNotIn("<img", out)
         self.assertNotIn("evil.example", out)
@@ -179,7 +178,7 @@ class HostileFieldBoundaryTests(unittest.TestCase):
         self.assertEqual(out.count("[!NOTE]"), 1)
 
     def test_results_hostile_fields_pass_through_raw(self):
-        # build_results feeds board-discord-bot's own JSON contract, not
+        # build_results feeds the bot's own JSON contract, not
         # GitHub markdown -- sanitize_markdown (a markdown-specific transform)
         # is not applied here, so the raw strings simply round-trip.
         data = json.dumps({"questions": [{"topic": "t", "question": self.HOSTILE}], "flags": [self.HOSTILE]})
@@ -207,6 +206,16 @@ class BuildResultsTests(unittest.TestCase):
         results = rac.build_results("not json", 7, "t", "u", [])
         self.assertEqual(results[0]["questions"], [])
         self.assertEqual(results[0]["flags"], [])
+
+    def test_author_included_in_results(self):
+        data = json.dumps({"questions": [], "flags": []})
+        results = rac.build_results(data, 7, "My issue", "https://github.com/x/y/issues/7", ["alice"], "octocat")
+        self.assertEqual(results[0]["author"], "octocat")
+
+    def test_author_defaults_to_empty_string_when_not_provided(self):
+        data = json.dumps({"questions": [], "flags": []})
+        results = rac.build_results(data, 7, "My issue", "https://github.com/x/y/issues/7", ["alice"])
+        self.assertEqual(results[0]["author"], "")
 
 
 class HeaderTests(unittest.TestCase):

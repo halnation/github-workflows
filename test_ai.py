@@ -177,7 +177,7 @@ def _live(style_env, response_json, urlopen_side_effect=None):
         return FakeResp(fake_response)
 
     try:
-        with mock.patch.dict(os.environ, {"DRY_RUN": "0", **style_env}, clear=False):
+        with mock.patch.dict(os.environ, {"DRY_RUN": "0", "AI_MODEL": "test-model", **style_env}, clear=False):
             importlib.reload(ai)
             with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch.object(
                 sys, "argv", ["ai.py", "scope", input_path, out_path]
@@ -200,7 +200,7 @@ class AnthropicStyleTests(unittest.TestCase):
         self.assertEqual(req.get_header("X-api-key"), "test-key")
         self.assertEqual(req.get_header("Anthropic-version"), "2023-06-01")
         body = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(body["model"], "claude-sonnet-5")
+        self.assertEqual(body["model"], "test-model")
         self.assertEqual(body["max_tokens"], 1500)
         self.assertIn("diff body", body["messages"][0]["content"])
 
@@ -332,10 +332,10 @@ class BuildRequestBodyTests(unittest.TestCase):
         self.assertEqual(body["response_format"], {"type": "json_object"})
 
     def test_model_and_max_tokens_and_prompt_always_present(self):
-        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_MODEL": "z-ai/glm-5.3-flash", "AI_MAX_TOKENS": "999"}, clear=False):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_MODEL": "test-org/test-model", "AI_MAX_TOKENS": "999"}, clear=False):
             importlib.reload(ai)
             body = ai.build_request_body("the prompt")
-        self.assertEqual(body["model"], "z-ai/glm-5.3-flash")
+        self.assertEqual(body["model"], "test-org/test-model")
         self.assertEqual(body["max_tokens"], 999)
         self.assertEqual(body["messages"], [{"role": "user", "content": "the prompt"}])
 
@@ -364,7 +364,7 @@ class ConfigTests(unittest.TestCase):
         importlib.reload(ai)
 
     def test_missing_url_is_fatal_only_when_live(self):
-        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai"}, clear=False):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "openai", "AI_MODEL": "test-model"}, clear=False):
             os.environ.pop("AI_API_URL", None)
             importlib.reload(ai)  # must not raise at import time anymore
             try:
@@ -373,6 +373,25 @@ class ConfigTests(unittest.TestCase):
                 ):
                     with self.assertRaises(SystemExit):
                         ai.main()
+            finally:
+                pass
+        importlib.reload(ai)
+
+    def test_missing_model_is_fatal_only_when_live(self):
+        with mock.patch.dict(os.environ, {"AI_API_STYLE": "anthropic"}, clear=False):
+            os.environ.pop("AI_MODEL", None)
+            importlib.reload(ai)  # must not raise at import time -- no hardcoded default either
+            try:
+                with mock.patch.dict(os.environ, {"DRY_RUN": "1"}, clear=False), mock.patch.object(
+                    sys, "argv", ["ai.py", "review", __file__, os.devnull]
+                ):
+                    ai.main()  # dry run: must not raise despite no AI_MODEL
+                with mock.patch.dict(
+                    os.environ, {"DRY_RUN": "0", "ANTHROPIC_API_KEY": "test-key"}, clear=False
+                ), mock.patch.object(sys, "argv", ["ai.py", "review", __file__, os.devnull]):
+                    with self.assertRaises(SystemExit) as ctx:
+                        ai.main()
+                    self.assertIn("AI_MODEL", str(ctx.exception))
             finally:
                 pass
         importlib.reload(ai)

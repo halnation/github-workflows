@@ -12,14 +12,14 @@ on:
         type: boolean
         default: true
       board_app_ref:
-        description: "board-app commit SHA, required for kind: scope."
+        description: "Board app commit SHA, required for kind: scope."
         type: string
         default: ""
       config:
         type: string
-        default: board-app/config.json
+        default: board-tool/config.json
       discord_bot_ref:
-        description: "board-discord-bot commit SHA, required for kind: scope."
+        description: "Bot commit SHA, required for kind: scope."
         type: string
         default: ""
     secrets:
@@ -42,7 +42,6 @@ env:
   DRY_RUN: ${{ inputs.dry_run == false && '0' || '1' }}
   AI_OUTPUT_CAP: "20000"
   MARKER: "<!-- github-workflows-ai -->"
-  MODEL_LABEL: ${{ inputs.backend == 'openrouter' && vars.OPENROUTER_MODEL || 'claude-sonnet-5' }}
 jobs:
   collect:
     # A review only runs when the ai-review label was just added, and only
@@ -69,8 +68,11 @@ jobs:
           [ -z "${{ inputs.board_app_ref }}" ] && missing+=("board_app_ref")
           [ -z "${{ inputs.discord_bot_ref }}" ] && missing+=("discord_bot_ref")
           [ -z "${{ inputs.config }}" ] && missing+=("config")
+          [ -z "${{ vars.TRACKER_REPO }}" ] && missing+=("vars.TRACKER_REPO")
+          [ -z "${{ vars.BOARD_APP_REPO }}" ] && missing+=("vars.BOARD_APP_REPO")
+          [ -z "${{ vars.BOT_REPO }}" ] && missing+=("vars.BOT_REPO")
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "Error: kind=scope requires the following inputs: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+            echo "Error: kind=scope requires the following inputs/vars: $(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
             exit 1
           fi
       - name: Resolve subject and recency gate
@@ -104,18 +106,18 @@ jobs:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }},General-Task,board-app
+          repositories: ${{ github.event.repository.name }},${{ vars.TRACKER_REPO }},${{ vars.BOARD_APP_REPO }}
           permission-pull-requests: read
           permission-issues: read
           permission-contents: read
           permission-organization-projects: read
-      - name: Check out board-app
+      - name: Check out the board app
         if: steps.gate.outputs.number != '' && inputs.kind == 'scope'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/board-app
+          repository: ${{ github.repository_owner }}/${{ vars.BOARD_APP_REPO }}
           ref: ${{ inputs.board_app_ref }}
-          path: board-app
+          path: board-tool
           token: ${{ steps.mint.outputs.token }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -180,11 +182,11 @@ jobs:
               echo "</pr-diff>"
             } > input.txt
           else
-            # Assignees + board status come from board-app's issue-card (the
-            # board is the source of truth for status; the raw GitHub event
-            # has no notion of project-board columns), so scope.md can flag a
-            # multi-assignee or a body-vs-board status mismatch.
-            card=$(GH_TOKEN="$BOARD_TOKEN" python3 board-app/board.py issue-card --config "$BOARD_CONFIG" "$NUMBER")
+            # Assignees + board status come from the board app's issue-card
+            # (the board is the source of truth for status; the raw GitHub
+            # event has no notion of project-board columns), so scope.md can
+            # flag a multi-assignee or a body-vs-board status mismatch.
+            card=$(GH_TOKEN="$BOARD_TOKEN" python3 board-tool/board.py issue-card --config "$BOARD_CONFIG" "$NUMBER")
             assignees=$(printf '%s' "$card" | jq -r '(.assignees // []) | join(", ")')
             status=$(printf '%s' "$card" | jq -r '.status // ""')
             {
@@ -258,7 +260,7 @@ jobs:
           # render_ai_comment.py builds GitHub markdown from the model's
           # structured JSON in OUR code, sanitizing every field -- the raw
           # model text never reaches this comment.
-          python3 "$GW/render_ai_comment.py" "$KIND" out.md "$NUMBER" "$MODEL_LABEL" body.md
+          python3 "$GW/render_ai_comment.py" "$KIND" out.md "$NUMBER" body.md
           if [ "${DRY_RUN:-1}" != "0" ]; then
             jq -nc --arg n "$NUMBER" '{would:"ai-comment",number:$n}' >&2
             exit 0
@@ -282,7 +284,7 @@ jobs:
             exit 0
           fi
           gh api "repos/$REPO/issues/$NUMBER/labels/ai-review" -X DELETE || true
-      - name: Mint app token for board-discord-bot checkout
+      - name: Mint app token for the bot checkout
         id: mint-discord
         if: inputs.kind == 'scope'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -290,15 +292,15 @@ jobs:
           app-id: ${{ vars.BOARD_APP_ID }}
           private-key: ${{ secrets.BOARD_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: discord-bot
+          repositories: ${{ vars.BOT_REPO }}
           permission-contents: read
-      - name: Check out board-discord-bot
+      - name: Check out the bot
         if: inputs.kind == 'scope'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.repository_owner }}/discord-bot
+          repository: ${{ github.repository_owner }}/${{ vars.BOT_REPO }}
           ref: ${{ inputs.discord_bot_ref }}
-          path: discord-bot
+          path: bot-tool
           token: ${{ steps.mint-discord.outputs.token }}
           persist-credentials: false
       - name: Single-issue quality check
@@ -307,10 +309,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           NUMBER: ${{ needs.collect.outputs.number }}
+          AUTHOR: ${{ github.event.issue.user.login }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           title=$(gh api "repos/$REPO/issues/$NUMBER" --jq .title)
           url=$(gh api "repos/$REPO/issues/$NUMBER" --jq .html_url)
           assignees=$(gh api "repos/$REPO/issues/$NUMBER" --jq '[.assignees[].login]')
-          python3 "$GW/render_ai_comment.py" results out.md "$NUMBER" "$title" "$url" "$assignees" results.json
-          python3 discord-bot/issue_quality.py single results.json
+          python3 "$GW/render_ai_comment.py" results out.md "$NUMBER" "$title" "$url" "$assignees" results.json "$AUTHOR"
+          python3 bot-tool/issue_quality.py single results.json
